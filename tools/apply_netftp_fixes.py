@@ -193,8 +193,8 @@ def main() -> None:
 '''
     s = s[:start] + download + s[end:]
 
-    # Add the animated FTP server status indicator. It is UI-only: server
-    # ownership, lifecycle, ports, and networking architecture remain intact.
+    # Add a UI-only animated FTP server status indicator. Server ownership,
+    # lifecycle, ports, and networking architecture are unchanged.
     if "private fun ServerStatusAnimation(" not in s:
         imports = '''import androidx.activity.result.contract.ActivityResultContracts
 '''
@@ -242,10 +242,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Canvas(
-                modifier = Modifier.size(148.dp),
-                contentDescription = if (running) "FTP server running" else "FTP server stopped"
-            ) {
+            Canvas(Modifier.size(148.dp)) {
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val baseRadius = size.minDimension * 0.22f
                 if (running) {
