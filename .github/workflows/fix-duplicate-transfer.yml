@@ -1,0 +1,48 @@
+name: Fix duplicate TransfersTab
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove duplicate TransfersTab
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
+          s=p.read_text()
+          marker=' @Composable private fun TransfersTab(){'
+          console=' @Composable private fun ConsoleTab(){'
+          starts=[]
+          pos=0
+          while True:
+              i=s.find(marker,pos)
+              if i<0: break
+              starts.append(i); pos=i+len(marker)
+          if len(starts)>1:
+              a=starts[0]
+              b=s.find(console,a)
+              if b<0: raise SystemExit('ConsoleTab marker not found')
+              s=s[:a]+s[b:]
+              p.write_text(s)
+              print('Removed first duplicate TransfersTab')
+          else:
+              print('No duplicate TransfersTab found')
+          PY
+      - name: Commit source repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/src/main/java/com/netftplab/MainActivity.kt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Remove duplicate TransfersTab declaration"
+          git push
+      - name: Remove repair workflow
+        run: |
+          git rm .github/workflows/fix-duplicate-transfer.yml
+          git commit -m "Remove temporary repair workflow"
+          git push
