@@ -1,0 +1,97 @@
+name: One-time download resume fix
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch download resume handling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
+          s=p.read_text()
+          old='''                val total = client.remoteSize(entry.name).takeIf { it >= 0 } ?: entry.size
+                val resume = if (outFile.exists()) min(outFile.length(), total) else 0L
+                val start = System.currentTimeMillis()
+                transfer = TransferState(
+                    active = true,
+                    direction = "DOWNLOAD",
+                    name = entry.name,
+                    done = resume,
+                    total = total,
+                    message = if (resume > 0) "Resuming" else "Starting"
+                )
+                RandomAccessFile(outFile, "rw").use { raf ->'''
+          new='''                val total = client.remoteSize(entry.name).takeIf { it >= 0 } ?: entry.size
+                val existingLength = if (outFile.exists()) outFile.length() else 0L
+                if (total >= 0 && existingLength >= total && total > 0) {
+                    val localHash = sha256(outFile)
+                    val remoteHash = client.remoteSha256(entry.name)
+                    transfer = TransferState(
+                        active = false,
+                        direction = "DOWNLOAD",
+                        name = entry.name,
+                        done = total,
+                        total = total,
+                        message = "Already complete",
+                        sha256Local = localHash,
+                        sha256Remote = remoteHash,
+                        verified = remoteHash.takeIf { it.isNotBlank() }?.let { localHash.equals(it, true) }
+                    )
+                    session = session.copy(bytes = session.bytes + total)
+                    log("DATA", "Download skipped: ${entry.name} already complete (${total} bytes)")
+                    return@launch
+                }
+                val resume = if (existingLength > 0) min(existingLength, total) else 0L
+                val start = System.currentTimeMillis()
+                transfer = TransferState(
+                    active = true,
+                    direction = "DOWNLOAD",
+                    name = entry.name,
+                    done = resume,
+                    total = total,
+                    message = if (resume > 0) "Resuming" else "Starting"
+                )
+                RandomAccessFile(outFile, "rw").use { raf ->'''
+          if old not in s: raise SystemExit('download block not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+      - name: Improve server file refresh while visible
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
+          s=p.read_text()
+          old='''        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Text("EMBEDDED FTP SERVER", style = MaterialTheme.typography.headlineSmall)'''
+          new='''        LaunchedEffect(serverRunning) {
+            while (serverRunning) {
+                refreshServerFiles()
+                delay(1000)
+            }
+        }
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Text("EMBEDDED FTP SERVER", style = MaterialTheme.typography.headlineSmall)'''
+          if old in s:
+              s=s.replace(old,new,1)
+          else:
+              print('ServerTab insertion point not found; continuing')
+          p.write_text(s)
+          PY
+      - name: Remove workflow and commit
+        run: |
+          rm -f .github/workflows/fix-download-resume.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/netftplab/MainActivity.kt .github/workflows/fix-download-resume.yml
+          git diff --cached --quiet && exit 0
+          git commit -m 'Fix complete download resume loop and server refresh'
+          git push
