@@ -6,14 +6,9 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
-import android.graphics.Bitmap
-import android.graphics.Color as AndroidColor
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.MultiFormatWriter
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,7 +24,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
 import java.io.*
@@ -74,7 +68,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var serverRoot: File
 
     private val openDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) uploadUri(uri)
+        if (uri != null) {
+            if (connectedTarget.isNotBlank()) uploadUri(uri) else importToServer(uri)
+        }
     }
 
     private val importToServerDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -313,7 +309,9 @@ class MainActivity : ComponentActivity() {
             Text(if (connectedTarget.isBlank()) "Not connected" else "Connected: $connectedTarget", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { openDocument.launch(arrayOf("*/*")) }, enabled = connectedTarget.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Upload") }
+                Button(onClick = { openDocument.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) {
+                    Text(if (connectedTarget.isBlank()) "Upload / Share" else "Upload")
+                }
                 OutlinedButton(onClick = ::refreshRemote, enabled = connectedTarget.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Refresh") }
             }
             Spacer(Modifier.height(12.dp))
