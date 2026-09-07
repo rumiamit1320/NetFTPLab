@@ -40,4 +40,4 @@ CI validation checkpoint: 2026-09-08
 
 Transfer/storage validation patch: public Downloads + notification permission handling.
 
-Final patch execution trigger.
+Final CI patch step enabled.
