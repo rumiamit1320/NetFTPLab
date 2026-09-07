@@ -3,6 +3,7 @@ package com.netftplab
 import android.Manifest
 import android.content.*
 import android.net.ConnectivityManager
+import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.graphics.Bitmap
@@ -206,7 +207,8 @@ class MainActivity : ComponentActivity() {
                     out.flush()
                 }
                 val localHash = sha256(outFile); val remoteHash = ftp?.remoteSha256(entry.name).orEmpty()
-                transfer = transfer.copy(active = false, message = "Complete", sha256Local = localHash, sha256Remote = remoteHash, verified = if (remoteHash.isBlank()) null else localHash.equals(remoteHash, true))
+                val verified = if (remoteHash.isBlank()) null else localHash.equals(remoteHash, true)
+                transfer = transfer.copy(active = false, message = "Complete", sha256Local = localHash, sha256Remote = remoteHash, verified = verified)
                 session = session.copy(bytes = session.bytes + outFile.length(), throughputBps = if (outFile.length() > 0) outFile.length() * 1000 / maxOf(1, System.currentTimeMillis() - started))
                 log("DATA", "Saved ${outFile.absolutePath}; SHA-256 $localHash")
             } catch (e: Exception) { transfer = transfer.copy(active = false, message = "Download failed: ${e.message}"); log("ERROR", "Download failed: ${e.message}") }
@@ -215,7 +217,8 @@ class MainActivity : ComponentActivity() {
 
     private fun verifyRemote(name: String, uri: Uri, size: Long) {
         val remoteHash = ftp?.remoteSha256(name).orEmpty(); val localHash = contentSha256(uri)
-        transfer = transfer.copy(active = false, message = "Complete", sha256Local = localHash, sha256Remote = remoteHash, verified = if (remoteHash.isBlank()) null else localHash.equals(remoteHash, true))
+        val verified = if (remoteHash.isBlank()) null else localHash.equals(remoteHash, true)
+        transfer = transfer.copy(active = false, message = "Complete", sha256Local = localHash, sha256Remote = remoteHash, verified = verified)
         session = session.copy(bytes = session.bytes + size)
         log("DATA", "Upload complete; local SHA-256=$localHash remote SHA-256=${remoteHash.ifBlank { "unsupported" }}")
     }
@@ -267,6 +270,7 @@ class MainActivity : ComponentActivity() {
         catch (e: Exception) { log("ERROR", "Server start failed: ${e.message}") }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable fun NetFtpApp() {
         var tab by remember { mutableIntStateOf(0) }
         MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF60A5FA), secondary = Color(0xFF34D399), background = Color(0xFF080B10), surface = Color(0xFF11161E))) {
