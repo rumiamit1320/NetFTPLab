@@ -207,7 +207,7 @@ class MainActivity : ComponentActivity() {
                     out.flush()
                 }
                 val localHash = sha256(outFile); val remoteHash = ftp?.remoteSha256(entry.name).orEmpty()
-                val verified = if (remoteHash.isBlank()) null else localHash.equals(remoteHash, true)
+                val verified = remoteHash.takeIf { it.isNotBlank() }?.let { localHash.equals(it, true) }
                 transfer = transfer.copy(active = false, message = "Complete", sha256Local = localHash, sha256Remote = remoteHash, verified = verified)
                 session = session.copy(bytes = session.bytes + outFile.length(), throughputBps = if (outFile.length() > 0) outFile.length() * 1000 / maxOf(1, System.currentTimeMillis() - started))
                 log("DATA", "Saved ${outFile.absolutePath}; SHA-256 $localHash")
@@ -217,7 +217,7 @@ class MainActivity : ComponentActivity() {
 
     private fun verifyRemote(name: String, uri: Uri, size: Long) {
         val remoteHash = ftp?.remoteSha256(name).orEmpty(); val localHash = contentSha256(uri)
-        val verified = if (remoteHash.isBlank()) null else localHash.equals(remoteHash, true)
+        val verified = remoteHash.takeIf { it.isNotBlank() }?.let { localHash.equals(it, true) }
         transfer = transfer.copy(active = false, message = "Complete", sha256Local = localHash, sha256Remote = remoteHash, verified = verified)
         session = session.copy(bytes = session.bytes + size)
         log("DATA", "Upload complete; local SHA-256=$localHash remote SHA-256=${remoteHash.ifBlank { "unsupported" }}")
@@ -277,137 +277,108 @@ class MainActivity : ComponentActivity() {
             Scaffold(
                 topBar = { TopAppBar(title = { Text("NetFTP Lab") }, actions = { IconButton(onClick = ::scanNetwork) { Icon(Icons.Default.Refresh, "Scan") } }) },
                 bottomBar = { NavigationBar { listOf("Devices" to Icons.Default.Devices, "Transfers" to Icons.Default.SwapVert, "Console" to Icons.Default.Terminal, "Network Lab" to Icons.Default.Timeline, "Server" to Icons.Default.Settings).forEachIndexed { i, x -> NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Icon(x.second, null) }, label = { Text(x.first) }) } } }
-            ) { pad -> Box(Modifier.padding(pad).fillMaxSize()) { when (tab) { 0 -> DeviceScreen(); 1 -> TransferScreen(); 2 -> ConsoleScreen(); 3 -> LabScreen(); else -> ServerScreen() } } }
+            ) { pad -> Box(Modifier.padding(pad).fillMaxSize()) {
+                when (tab) {
+                    0 -> DevicesTab()
+                    1 -> TransfersTab()
+                    2 -> ConsoleTab()
+                    3 -> NetworkLabTab()
+                    else -> ServerTab()
+                }
+                if (showQr) QrDialog()
+            } }
         }
     }
 
-    @Composable fun DeviceScreen() {
+    @Composable private fun DevicesTab() {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
-            Text("ACTIVE DEVICES", style = MaterialTheme.typography.labelLarge); Text("Local IPv4: ${localIpv4() ?: "not connected"}", style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(8.dp)); Button(onClick = ::scanNetwork, enabled = !scanning, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Search, null); Spacer(Modifier.width(8.dp)); Text(if (scanning) "Scanning…" else "Scan LAN") }
-            Spacer(Modifier.height(8.dp)); if (connectedTarget.isNotBlank()) Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text("FTP SESSION", style = MaterialTheme.typography.labelLarge); Text(connectedTarget); Text("Control channel connected • Passive data channel ready"); Text("Bytes this session: ${session.bytes}") } }
-            Spacer(Modifier.height(8.dp));
-            if (discovered.isEmpty()) Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp)) { Text("No service-bearing devices discovered"); Text("Tap Scan LAN. The probe includes TCP 21 and the NetFTP Lab server port 2121.", style = MaterialTheme.typography.bodySmall) } }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) { items(discovered) { d -> Card(Modifier.fillMaxWidth().clickable { connect(d) }) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (d.ip == localIpv4()) Icons.Default.PhoneAndroid else Icons.Default.Computer, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(d.ip, style = MaterialTheme.typography.titleMedium); Text("TCP: ${d.services.joinToString()} • RTT ${d.latencyMs ?: "-"} ms", style = MaterialTheme.typography.bodySmall); Text(if (2121 in d.services) "NetFTP Lab server" else if (21 in d.services) "FTP server" else "Network service") }; Icon(Icons.Default.ChevronRight, null) } } } }
-        }
-    }
-
-    @Composable fun TransferScreen() {
-        Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-            Text("FILE TRANSFER", style = MaterialTheme.typography.headlineSmall); Text(if (connectedTarget.isBlank()) "Connect to a device from Devices" else "Connected: $connectedTarget")
-            Spacer(Modifier.height(10.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(onClick = { openDocument.launch(arrayOf("*/*")) }, enabled = connectedTarget.isNotBlank() && !transfer.active, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Upload, null); Spacer(Modifier.width(4.dp)); Text("Upload") }; OutlinedButton(onClick = ::refreshRemote, enabled = connectedTarget.isNotBlank(), modifier = Modifier.weight(1f)) { Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(4.dp)); Text("Refresh") } }
-            Spacer(Modifier.height(12.dp));
-            if (transfer.active || transfer.message != "Idle") Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text("${transfer.direction} ${transfer.name}", style = MaterialTheme.typography.titleMedium); Text(transfer.message); if (transfer.total > 0) { LinearProgressIndicator(progress = { (transfer.done.toDouble() / transfer.total).toFloat().coerceIn(0f,1f) }, modifier = Modifier.fillMaxWidth()); Text("${transfer.done} / ${transfer.total} B • ${humanRate(transfer.speedBps)}") }; if (transfer.sha256Local.isNotBlank()) Text("Local SHA-256: ${transfer.sha256Local}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall); if (transfer.sha256Remote.isNotBlank()) Text("Remote SHA-256: ${transfer.sha256Remote}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall); transfer.verified?.let { Text(if (it) "✓ SHA-256 VERIFIED" else "✕ SHA-256 MISMATCH", color = if (it) Color(0xFF34D399) else Color(0xFFF87171)) } } }
-            Spacer(Modifier.height(12.dp)); Text("REMOTE FILES", style = MaterialTheme.typography.labelLarge)
-            if (remoteFiles.isEmpty()) Text("No listing yet. Connect and refresh.") else remoteFiles.forEach { f -> Card(Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable { download(f) }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (f.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text(f.name); Text(if (f.directory) "Directory" else "${f.size} B • tap to download", style = MaterialTheme.typography.bodySmall) }; if (!f.directory) Icon(Icons.Default.Download, null) } } }
-            Spacer(Modifier.height(12.dp)); Text("Local transfer directory: ${transferRoot.absolutePath}", style = MaterialTheme.typography.bodySmall)
-        }
-    }
-
-    @Composable fun ConsoleScreen() { Column(Modifier.fillMaxSize().padding(12.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Text("PROTOCOL CONSOLE", style = MaterialTheme.typography.titleMedium); Spacer(Modifier.weight(1f)); TextButton(onClick = { logs.clear() }) { Text("Clear") } }; LazyColumn(Modifier.fillMaxSize().background(Color(0xFF05070A)).padding(10.dp)) { items(logs) { l -> Text("${l.time}  ${l.layer.padEnd(10)} ${l.text}", color = when(l.layer) { "ERROR" -> Color(0xFFF87171); "TCP" -> Color(0xFF60A5FA); "FTP" -> Color(0xFF34D399); "DATA" -> Color(0xFFFBBF24); else -> Color(0xFFD1D5DB) }, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) } } } }
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable fun LabScreen() {
-        var mode by remember { mutableStateOf("ALOHA") }; var load by remember { mutableFloatStateOf(.5f) }; var devices by remember { mutableFloatStateOf(3f) }; var cc by remember { mutableStateOf("RENO") }
-        val g = devices * load; val throughput = when(mode) { "SLOTTED" -> NetworkLab.slottedThroughput(g.toDouble()); "CSMA/CA" -> NetworkLab.csmaCaThroughput(g.toDouble()); else -> NetworkLab.alohaThroughput(g.toDouble()) }
-        Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-            Text("NETWORK LAB", style = MaterialTheme.typography.headlineSmall); Text("Models are educational; Android apps cannot read every Wi-Fi MAC collision from the chipset.", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp))
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { listOf("ALOHA","SLOTTED","CSMA/CA").forEachIndexed { i,m -> SegmentedButton(selected = mode == m, onClick = { mode = m }, shape = SegmentedButtonDefaults.itemShape(i, 3)) { Text(m) } } }
-            Text("Devices: ${devices.toInt()}"); Slider(value = devices, onValueChange = { devices = it }, valueRange = 1f..20f, steps = 18); Text("Offered load G: %.3f".format(g)); Slider(value = load, onValueChange = { load = it }, valueRange = .05f..2f)
-            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Text("MAC MODEL", style=MaterialTheme.typography.labelLarge); Text("S = %.4f".format(throughput)); Text("Collision/contention index = %.1f%%".format((1-throughput).coerceIn(0.0,1.0)*100)); Text("Frame → contention → random backoff → retransmit") } }
-            Spacer(Modifier.height(10.dp)); Text("TCP CONGESTION CONTROL", style=MaterialTheme.typography.labelLarge); EnumMenu("Algorithm", cc, listOf("RENO","CUBIC","BBR")) { cc=it }; Text("Modeled cwnd trace"); val trace=NetworkLab.cwndTrace(cc); val maxY=trace.maxOf{it.y}.coerceAtLeast(1f); trace.takeLast(20).forEach { Row(verticalAlignment=Alignment.CenterVertically) { Text("%2.0f".format(it.x), Modifier.width(28.dp)); LinearProgressIndicator(progress = { it.y / maxY }, modifier = Modifier.weight(1f).height(7.dp)); Text(" %.1f".format(it.y),Modifier.width(42.dp)) } }
-            Text("Observable app telemetry: TCP connect RTT, bytes, application retries and transfer throughput. Kernel TCP cwnd is not exposed by ordinary Android APIs.", style=MaterialTheme.typography.bodySmall)
-        }
-    }
-
-    @Composable fun EnumMenu(title:String,value:String,entries:List<String>,onSelected:(String)->Unit) { var ex by remember{mutableStateOf(false)}; Box { OutlinedButton(onClick = { ex = true }, modifier = Modifier.fillMaxWidth()){Column{Text(title,style=MaterialTheme.typography.labelSmall);Text(value)}}; DropdownMenu(expanded = ex, onDismissRequest = { ex = false }){entries.forEach{DropdownMenuItem(text={Text(it)},onClick={onSelected(it);ex=false})}} } }
-
-    @Composable fun ServerScreen() {
-        val ip = localIpv4()
-        LaunchedEffect(serverRunning) { refreshServerFiles() }
-        Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-            Text("EMBEDDED FTP SERVER", style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.height(10.dp))
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(if (serverRunning) "● RUNNING" else "○ STOPPED", color = if (serverRunning) Color(0xFF34D399) else Color(0xFF9CA3AF))
-                    Text("LAN endpoint: ${ip ?: "-"}:2121", fontFamily = FontFamily.Monospace)
-                    Text("Passive data ports: 21210–21250")
-                    Text("Authentication: anonymous (LAN lab)")
-                    Spacer(Modifier.height(8.dp))
-                    Text("Shared folder: NetFTPShare", style = MaterialTheme.typography.titleMedium)
-                    Text("Files in this folder are downloadable from the laptop.", style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(10.dp))
-                    Button(onClick = ::toggleServer, modifier = Modifier.fillMaxWidth()) { Text(if (serverRunning) "Stop Server" else "Start Server") }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { importToServerDocument.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Add to Share")
-                }
-                OutlinedButton(onClick = ::refreshServerFiles, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(4.dp)); Text("Refresh")
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("PHONE → LAPTOP", style = MaterialTheme.typography.titleMedium)
-                    Text("1. Add a phone file to the share.")
-                    Text("2. Keep the server running.")
-                    Text("3. On the laptop open:")
-                    Text("ftp://${ip ?: "<phone-ip>"}:2121", fontFamily = FontFamily.Monospace)
-                    Text("4. Open/download a file from the list below.", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Text("SHARED FILES", style = MaterialTheme.typography.titleMedium)
-            if (serverFiles.isEmpty()) {
-                Text("No shared files yet. Tap Add to Share to choose a file from the phone.", style = MaterialTheme.typography.bodySmall)
-            } else {
-                serverFiles.forEach { file ->
-                    Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(file.name)
-                                Text(if (file.isDirectory) "Directory" else "${file.length()} B • available to laptop", style = MaterialTheme.typography.bodySmall)
-                            }
-                            if (file.isFile) IconButton(onClick = { deleteServerFile(file) }) { Icon(Icons.Default.Delete, "Delete") }
+            Button(onClick = ::scanNetwork, enabled = !scanning, modifier = Modifier.fillMaxWidth()) { Text(if (scanning) "Scanning…" else "Scan LAN") }
+            Spacer(Modifier.height(12.dp))
+            if (discovered.isEmpty()) Text("No devices discovered yet.", style = MaterialTheme.typography.bodyMedium)
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(discovered) { d ->
+                    Card(Modifier.fillMaxWidth().clickable { connect(d) }) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(d.ip, style = MaterialTheme.typography.titleMedium)
+                            Text("Services: ${d.services.joinToString()}${d.latencyMs?.let { " • ${it} ms" } ?: ""}")
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { showQr = true }, enabled = ip != null, modifier = Modifier.weight(1f)) { Icon(Icons.Default.QrCode2, null); Spacer(Modifier.width(4.dp)); Text("Connection QR") }
-                OutlinedButton(onClick = {
-                    val text = "ftp://${ip ?: "<phone-ip>"}:2121"
-                    (getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(ClipData.newPlainText("NetFTP endpoint", text))
-                    log("SERVER", "FTP endpoint copied to clipboard")
-                }, enabled = ip != null, modifier = Modifier.weight(1f)) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(4.dp)); Text("Copy endpoint") }
-            }
-            if (showQr && ip != null) {
-                AlertDialog(onDismissRequest = { showQr = false }, title = { Text("FTP connection QR") }, text = { Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) { QrCode("ftp://${ip}:2121"); Text("ftp://${ip}:2121", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) } }, confirmButton = { TextButton(onClick = { showQr = false }) { Text("Close") } })
-            }
-            Spacer(Modifier.height(10.dp))
-            Text("Server capabilities", style = MaterialTheme.typography.titleMedium)
-            listOf("Multiple simultaneous control sessions", "PASV + EPSV passive data channels", "LIST / NLST directory browsing", "RETR download and STOR upload", "REST resume for interrupted transfers", "SIZE and custom XSHA256 verification", "CWD / CDUP / PWD / DELE / FEAT / TYPE", "Fixed passive range for firewall configuration").forEach { Text("✓ $it") }
         }
     }
 
-    @Composable
-    private fun QrCode(value: String) {
-        val bitmap = remember(value) {
-            val matrix = MultiFormatWriter().encode(value, BarcodeFormat.QR_CODE, 640, 640)
-            Bitmap.createBitmap(640, 640, Bitmap.Config.RGB_565).also { b ->
-                for (x in 0 until 640) for (y in 0 until 640) b.setPixel(x, y, if (matrix.get(x, y)) AndroidColor.BLACK else AndroidColor.WHITE)
+    @Composable private fun TransfersTab() {
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Text(if (connectedTarget.isBlank()) "Not connected" else "Connected: $connectedTarget", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { openDocument.launch(arrayOf("*/*")) }, enabled = connectedTarget.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Upload") }
+                OutlinedButton(onClick = ::refreshRemote, enabled = connectedTarget.isNotBlank(), modifier = Modifier.weight(1f)) { Text("Refresh") }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (transfer.active || transfer.message != "Idle") {
+                Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) {
+                    Text("${transfer.direction}: ${transfer.name}")
+                    Spacer(Modifier.height(6.dp))
+                    if (transfer.total > 0) LinearProgressIndicator(progress = { (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                    Text("${transfer.message} • ${transfer.done}/${transfer.total} bytes • ${transfer.speedBps} B/s")
+                    if (transfer.sha256Local.isNotBlank()) Text("SHA-256 local: ${transfer.sha256Local}")
+                    if (transfer.sha256Remote.isNotBlank()) Text("SHA-256 remote: ${transfer.sha256Remote}")
+                    transfer.verified?.let { Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH") }
+                } }
+            }
+            Spacer(Modifier.height(12.dp))
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(remoteFiles) { f -> Card(Modifier.fillMaxWidth().clickable { download(f) }) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(if (f.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null); Spacer(Modifier.width(10.dp)); Column { Text(f.name); Text(if (f.directory) "Directory" else "${f.size} bytes") } } } }
             }
         }
-        androidx.compose.foundation.Image(bitmap.asImageBitmap(), contentDescription = "FTP endpoint QR", modifier = Modifier.size(260.dp))
     }
 
-    private fun humanRate(bps:Long):String = when { bps>=1_000_000 -> "%.2f MB/s".format(bps/1_000_000.0); bps>=1_000 -> "%.1f KB/s".format(bps/1_000.0); else -> "$bps B/s" }
+    @Composable private fun ConsoleTab() {
+        LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { items(logs) { l -> Text("${l.time} [${l.layer}] ${l.text}", fontFamily = FontFamily.Monospace) } }
+    }
+
+    @Composable private fun NetworkLabTab() {
+        val scroll = rememberScrollState()
+        Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("ALOHA / CSMA-CA / TCP congestion models", style = MaterialTheme.typography.titleLarge)
+            Text("Pure ALOHA: S = G exp(-2G)")
+            Text("Slotted ALOHA: S = G exp(-G)")
+            Text("TCP Reno/CUBIC/BBR traces are educational models; the app does not claim physical Wi-Fi collision visibility.")
+        }
+    }
+
+    @Composable private fun ServerTab() {
+        LaunchedEffect(Unit) { refreshServerFiles() }
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Text("Embedded FTP Server", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(8.dp))
+            Text(if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED")
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = ::toggleServer, modifier = Modifier.fillMaxWidth()) { Text(if (serverRunning) "Stop Server" else "Start Server") }
+            Spacer(Modifier.height(12.dp))
+            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) {
+                Text("Shared folder: NetFTPShare", style = MaterialTheme.typography.titleMedium)
+                Text("Files added here are available to the laptop through FTP.")
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(onClick = { importToServerDocument.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) { Text("Add to Share") }
+                    OutlinedButton(onClick = ::refreshServerFiles, modifier = Modifier.weight(1f)) { Text("Refresh") }
+                }
+            } }
+            Spacer(Modifier.height(10.dp))
+            Text("Shared Files", style = MaterialTheme.typography.titleMedium)
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(serverFiles) { f -> Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(f.name); Text("${f.length()} bytes • ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(f.lastModified()))}") }; IconButton(onClick = { deleteServerFile(f) }) { Icon(Icons.Default.Delete, "Delete") } } } }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("PHONE → LAPTOP", style = MaterialTheme.typography.titleMedium)
+            Text("1. Add a phone file to the share.\n2. Start the server.\n3. On the laptop open ftp://${localIpv4() ?: "PHONE_IP"}:$serverPort\n4. Download the file.")
+        }
+    }
+
+    @Composable private fun QrDialog() {
+        AlertDialog(onDismissRequest = { showQr = false }, confirmButton = { TextButton(onClick = { showQr = false }) { Text("Close") } }, title = { Text("FTP endpoint") }, text = { Text("ftp://${localIpv4() ?: "PHONE_IP"}:$serverPort") })
+    }
 }
