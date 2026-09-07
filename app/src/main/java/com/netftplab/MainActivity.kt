@@ -3,6 +3,9 @@ package com.netftplab
 import android.Manifest
 import android.content.Context
 import android.content.ContentValues
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.graphics.Bitmap
@@ -74,6 +77,7 @@ class MainActivity : ComponentActivity() {
     private var transfer by mutableStateOf(TransferState())
     private var session by mutableStateOf(SessionStats())
     private var showQr by mutableStateOf(false)
+    private val notificationChannelId = "netftp_server"
 
     private var ftp: FtpClient? = null
     private lateinit var server: FtpServer
@@ -93,6 +97,7 @@ class MainActivity : ComponentActivity() {
         transferRoot = File(getExternalFilesDir(null), "NetFTPLabTransfers").apply { mkdirs() }
         serverRoot = File(getExternalFilesDir(null), "NetFTPShare").apply { mkdirs() }
         server = FtpServer(serverRoot, logger = ::log)
+        createNotificationChannel()
         refreshServerFiles()
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 40)
@@ -103,7 +108,36 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         try { ftp?.close() } catch (_: Exception) { }
         server.stop()
+        cancelServerNotification()
         super.onDestroy()
+    }
+
+    private fun createNotificationChannel() {
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            val channel = NotificationChannel(
+                notificationChannelId,
+                "NetFTP Server",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "NetFTP Lab embedded FTP server status" }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun showServerNotification() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        val notification = NotificationCompat.Builder(this, notificationChannelId)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle("NetFTP Lab FTP server")
+            .setContentText("Server running on ${localIpv4() ?: "LAN"}:$serverPort")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(2121, notification)
+    }
+
+    private fun cancelServerNotification() {
+        getSystemService(NotificationManager::class.java).cancel(2121)
     }
 
     private fun log(layer: String, text: String) {
@@ -508,11 +542,13 @@ class MainActivity : ComponentActivity() {
         if (serverRunning) {
             server.stop()
             serverRunning = false
+            cancelServerNotification()
             log("SERVER", "Embedded FTP server stopped")
         } else {
             try {
                 server.start()
                 serverRunning = true
+                showServerNotification()
                 log("SERVER", "Embedded FTP server active on ${localIpv4() ?: "0.0.0.0"}:$serverPort")
             } catch (e: Exception) {
                 log("ERROR", "Server start failed: ${e.message}")
