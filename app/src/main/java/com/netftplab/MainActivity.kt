@@ -92,6 +92,11 @@ class MainActivity : ComponentActivity() {
         if (uri != null) importToServer(uri)
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted && serverRunning) showServerNotification()
+        else if (!granted) log("SERVER", "Notification permission denied; FTP server remains available in-app")
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         transferRoot = File(getExternalFilesDir(null), "NetFTPLabTransfers").apply { mkdirs() }
@@ -99,8 +104,9 @@ class MainActivity : ComponentActivity() {
         server = FtpServer(serverRoot, logger = ::log)
         createNotificationChannel()
         refreshServerFiles()
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 40)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent { NetFtpApp() }
     }
@@ -354,17 +360,45 @@ class MainActivity : ComponentActivity() {
                 if (!outFile.path.startsWith(transferRoot.canonicalPath + File.separator)) {
                     throw IOException("Unsafe filename")
                 }
+
                 val total = client.remoteSize(entry.name).takeIf { it >= 0 } ?: entry.size
-                val resume = if (outFile.exists()) min(outFile.length(), total) else 0L
-                val start = System.currentTimeMillis()
+                val existing = if (outFile.exists()) outFile.length() else 0L
+
+                if (total >= 0L && existing >= total) {
+                    val localHash = sha256(outFile)
+                    val remoteHash = client.remoteSha256(entry.name)
+                    val verified = remoteHash.takeIf { it.isNotBlank() }
+                        ?.let { localHash.equals(it, true) }
+                    if (verified == false) {
+                        throw IOException("Cached file SHA-256 does not match remote file")
+                    }
+                    transfer = TransferState(
+                        active = false,
+                        direction = "DOWNLOAD",
+                        name = entry.name,
+                        done = total,
+                        total = total,
+                        message = "Already complete",
+                        sha256Local = localHash,
+                        sha256Remote = remoteHash,
+                        verified = verified
+                    )
+                    publishToDownloads(outFile, entry.name)
+                    log("DATA", "Download cache already complete; published ${entry.name} to Downloads")
+                    return@launch
+                }
+
+                val resume = if (existing > 0L && total > 0L) min(existing, total) else 0L
+                val startTime = System.currentTimeMillis()
                 transfer = TransferState(
                     active = true,
                     direction = "DOWNLOAD",
                     name = entry.name,
                     done = resume,
                     total = total,
-                    message = if (resume > 0) "Resuming" else "Starting"
+                    message = if (resume > 0L) "Resuming" else "Starting"
                 )
+
                 RandomAccessFile(outFile, "rw").use { raf ->
                     raf.setLength(resume)
                     raf.seek(resume)
@@ -373,7 +407,7 @@ class MainActivity : ComponentActivity() {
                         override fun write(b: ByteArray, off: Int, len: Int) = raf.write(b, off, len)
                     }
                     client.download(entry.name, output, resume) { done, receivedTotal ->
-                        val elapsed = maxOf(1L, System.currentTimeMillis() - start)
+                        val elapsed = maxOf(1L, System.currentTimeMillis() - startTime)
                         transfer = transfer.copy(
                             done = done,
                             total = receivedTotal,
@@ -383,22 +417,82 @@ class MainActivity : ComponentActivity() {
                     }
                     output.flush()
                 }
+
                 val localHash = sha256(outFile)
                 val remoteHash = client.remoteSha256(entry.name)
+                val verified = remoteHash.takeIf { it.isNotBlank() }
+                    ?.let { localHash.equals(it, true) }
+                if (verified == false) throw IOException("SHA-256 verification failed")
+
+                publishToDownloads(outFile, entry.name)
                 transfer = transfer.copy(
                     active = false,
-                    message = "Complete",
+                    message = "Complete — saved to Downloads",
                     sha256Local = localHash,
                     sha256Remote = remoteHash,
-                    verified = remoteHash.takeIf { it.isNotBlank() }?.let { localHash.equals(it, true) }
+                    verified = verified
                 )
                 session = session.copy(bytes = session.bytes + outFile.length())
-                log("DATA", "Saved ${outFile.absolutePath}; SHA-256 $localHash")
+                log("DATA", "Saved ${entry.name} to public Downloads; SHA-256 $localHash")
             } catch (e: Exception) {
                 transfer = transfer.copy(active = false, message = "Download failed: ${e.message}")
                 log("ERROR", "Download failed: ${e.message}")
             }
         }
+    }
+
+    private fun publishToDownloads(source: File, displayName: String) {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val resolver = contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+                put(MediaStore.Downloads.MIME_TYPE, mimeTypeFor(displayName))
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IOException("Cannot create public Downloads entry")
+            try {
+                resolver.openOutputStream(uri)?.use { output ->
+                    source.inputStream().use { input -> input.copyTo(output, 64 * 1024) }
+                } ?: throw IOException("Cannot open public Downloads output")
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+            } catch (e: Exception) {
+                resolver.delete(uri, null, null)
+                throw e
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).apply { mkdirs() }
+            val destination = File(dir, displayName).canonicalFile
+            if (!destination.path.startsWith(dir.canonicalPath + File.separator)) {
+                throw IOException("Unsafe Downloads filename")
+            }
+            source.inputStream().use { input ->
+                destination.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
+            }
+        }
+        transfer = transfer.copy(message = "Saved to Downloads")
+    }
+
+    private fun mimeTypeFor(name: String): String = when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
+        "pdf" -> "application/pdf"
+        "txt", "log" -> "text/plain"
+        "csv" -> "text/csv"
+        "json" -> "application/json"
+        "xml" -> "application/xml"
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "mp3" -> "audio/mpeg"
+        "mp4" -> "video/mp4"
+        "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        "zip" -> "application/zip"
+        else -> "application/octet-stream"
     }
 
     private fun verifyRemote(name: String, uri: Uri, size: Long) {
