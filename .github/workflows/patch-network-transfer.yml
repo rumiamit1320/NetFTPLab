@@ -1,0 +1,108 @@
+name: Patch Network and Incoming Transfers
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Android networking and incoming-file handling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
+          s=p.read_text()
+
+          old='''    private fun localIpv4(): String? {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val lp = cm.getLinkProperties(cm.activeNetwork) ?: return null
+        return lp.linkAddresses.firstOrNull { it.address is Inet4Address }?.address?.hostAddress
+    }
+'''
+          new='''    private fun localIpv4(): String? {
+        // Prefer the actual Wi-Fi/LAN interface address. Do not use a route/gateway
+        // address or a VPN interface as the FTP endpoint shown to other devices.
+        val interfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+        val preferred = interfaces.sortedBy { if (it.name.equals("wlan0", true)) 0 else if (it.name.startsWith("eth", true)) 1 else 2 }
+        for (ni in preferred) {
+            if (!ni.isUp || ni.isLoopback) continue
+            for (ia in ni.inetAddresses) {
+                val address = ia as? Inet4Address ?: continue
+                val host = address.hostAddress ?: continue
+                if (address.isLoopbackAddress || address.isLinkLocalAddress || address.isMulticastAddress) continue
+                if (host != "0.0.0.0") return host
+            }
+        }
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val lp = cm.getLinkProperties(cm.activeNetwork) ?: return null
+        return lp.linkAddresses.firstOrNull {
+            it.address is Inet4Address && !it.address.isLoopbackAddress && !it.address.isLinkLocalAddress
+        }?.address?.hostAddress
+    }
+'''
+          if old not in s:
+              raise SystemExit('localIpv4 block not found')
+          s=s.replace(old,new,1)
+
+          old2='''                transfer = TransferState(
+                    direction = "SERVER → PHONE",
+                    name = source.name,
+                    done = destination.length(),
+                    total = destination.length(),
+                    message = "Saved to ${destination.absolutePath}"
+                )
+                log("DATA", "Server file copied to phone transfer storage: ${destination.absolutePath}")
+'''
+          if old2 in s:
+              new2='''                transfer = TransferState(
+                    direction = "SERVER → PHONE",
+                    name = source.name,
+                    done = destination.length(),
+                    total = destination.length(),
+                    message = "Saved to app transfer storage"
+                )
+                log("DATA", "Server file copied to phone transfer storage: ${destination.absolutePath}")
+'''
+              s=s.replace(old2,new2,1)
+
+          # Make the incoming-file action explicit in the Server tab without changing
+          # the existing transfer protocol: the STOR result is already on the phone.
+          old3='''            Text("Shared files", style = MaterialTheme.typography.titleMedium)
+'''
+          new3='''            Text("Files received by this phone", style = MaterialTheme.typography.titleMedium)
+            Text("Files uploaded from a laptop/PC appear here. They are already stored on the phone; use the download icon to copy one into the app transfer area.", style = MaterialTheme.typography.bodySmall)
+'''
+          if old3 in s:
+              s=s.replace(old3,new3,1)
+
+          p.write_text(s)
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/netftplab/FtpServer.kt')
+          s=p.read_text()
+          old='''                                RandomAccessFile(f, "rw").use { raf ->
+                                    val start = min(restOffset, raf.length()); raf.seek(start)
+'''
+          new='''                                RandomAccessFile(f, "rw").use { raf ->
+                                    val start = min(restOffset, raf.length())
+                                    if (restOffset == 0L) raf.setLength(0L)
+                                    raf.seek(start)
+'''
+          if old not in s:
+              raise SystemExit('STOR block not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+
+          rm -f .github/workflows/patch-network-transfer.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpServer.kt .github/workflows/patch-network-transfer.yml
+          git commit -m 'Fix LAN IP selection and incoming FTP files'
+          git push
