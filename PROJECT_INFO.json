@@ -1,0 +1,21 @@
+{
+  "name": "NetFTP Lab",
+  "version": "2.0",
+  "architecture": "MainActivity + FtpClient + FtpServer + NetworkLab",
+  "features": [
+    "Active LAN discovery",
+    "Persistent FTP control session",
+    "EPSV/PASV",
+    "LIST/NLST",
+    "Upload/download",
+    "REST resume",
+    "SHA-256 verification",
+    "Multi-client embedded FTP server",
+    "Fixed passive port range 21210-21250",
+    "Protocol console",
+    "Transfer telemetry",
+    "Pure/Slotted ALOHA and CSMA/CA models",
+    "Reno/CUBIC/BBR congestion-window models",
+    "Material 3 UI"
+  ]
+}
