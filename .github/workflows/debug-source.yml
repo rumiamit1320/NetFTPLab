@@ -1,0 +1,15 @@
+name: Debug Source
+on:
+  push:
+    branches: [main]
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print MainActivity region
+        run: |
+          echo '--- SOURCE LINES 65-82 ---'
+          nl -ba app/src/main/java/com/netftplab/MainActivity.kt | sed -n '65,82p'
+          echo '--- BRACES/PARENS TAIL ---'
+          tail -n 20 app/src/main/java/com/netftplab/MainActivity.kt
