@@ -180,6 +180,10 @@ class FtpServer(
                     else -> reply(502, "Command not implemented")
                 }
             }
+        } catch (e: SocketTimeoutException) {
+            if (running.get()) {
+                logger("TCP", "Client ${socket.inetAddress.hostAddress} idle timeout; closing FTP session")
+            }
         } catch (e: Exception) {
             if (running.get()) logger("ERROR", "Client ${socket.inetAddress.hostAddress}: ${e.message}")
         } finally {
