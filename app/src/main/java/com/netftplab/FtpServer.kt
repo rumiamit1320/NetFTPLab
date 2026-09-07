@@ -3,6 +3,8 @@ package com.netftplab
 import java.io.*
 import java.net.*
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
@@ -113,9 +115,10 @@ class FtpServer(
                                 val out = ch.output()
                                 val target = safeResolve(cwd, arg.ifBlank { "." }) ?: cwd
                                 val files = if (target.isDirectory) target.listFiles()?.toList().orEmpty() else listOf(target)
+                                val dateFmt = SimpleDateFormat("MMM dd HH:mm", Locale.US)
                                 val text = files.joinToString("\r\n") { f ->
                                     val type = if (f.isDirectory) 'd' else '-'
-                                    String.format("%crw-r--r-- 1 owner group %10d Jan 01 00:00 %s", type, f.length(), f.name)
+                                    String.format("%crw-r--r-- 1 owner group %10d %s %s", type, f.length(), dateFmt.format(Date(f.lastModified())), f.name)
                                 } + if (files.isNotEmpty()) "\r\n" else ""
                                 out.write(text.toByteArray(StandardCharsets.UTF_8)); out.flush()
                             }
