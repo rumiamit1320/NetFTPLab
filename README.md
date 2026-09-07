@@ -37,3 +37,5 @@ The embedded server is anonymous FTP intended for a trusted LAN laboratory and s
 Open the repository in Android Studio, sync Gradle, and build the debug APK. GitHub Actions is configured to build `:app:assembleDebug` on pushes and pull requests to `main`.
 
 CI validation checkpoint: 2026-09-08
+
+Transfer/storage validation patch: public Downloads + notification permission handling.
