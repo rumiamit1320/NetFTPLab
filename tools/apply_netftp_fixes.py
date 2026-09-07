@@ -193,11 +193,136 @@ def main() -> None:
 '''
     s = s[:start] + download + s[end:]
 
-    # Keep the UI wording aligned with the actual destination.
-    s = s.replace("Local transfer directory: ${transferRoot.absolutePath}", "Download destination: public Downloads")
+    # Add the animated FTP server status indicator. It is UI-only: server
+    # ownership, lifecycle, ports, and networking architecture remain intact.
+    if "private fun ServerStatusAnimation(" not in s:
+        imports = '''import androidx.activity.result.contract.ActivityResultContracts
+'''
+        animation_imports = '''import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+'''
+        s = replace_once(s, imports, animation_imports, "Compose animation imports")
+
+        marker = '''    @Composable
+    private fun ServerTab() {
+'''
+        animation = r'''    @Composable
+    private fun ServerStatusAnimation(running: Boolean) {
+        val transition = rememberInfiniteTransition(label = "ftp-server-status")
+        val pulse = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "server-pulse"
+        )
+        val sweep = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(3200, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "server-sweep"
+        )
+        val statusColor = if (running) Color(0xFF34D399) else Color(0xFF64748B)
+        val pulseValue = pulse.value
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Canvas(
+                modifier = Modifier.size(148.dp),
+                contentDescription = if (running) "FTP server running" else "FTP server stopped"
+            ) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val baseRadius = size.minDimension * 0.22f
+                if (running) {
+                    drawCircle(
+                        color = statusColor.copy(alpha = 0.05f + 0.08f * (1f - pulseValue)),
+                        radius = baseRadius + size.minDimension * 0.24f * pulseValue,
+                        center = center
+                    )
+                    drawCircle(
+                        color = statusColor.copy(alpha = 0.10f + 0.10f * (1f - pulseValue)),
+                        radius = baseRadius + size.minDimension * 0.14f * pulseValue,
+                        center = center,
+                        style = Stroke(width = 3.dp.toPx())
+                    )
+                    drawArc(
+                        color = statusColor,
+                        startAngle = sweep.value,
+                        sweepAngle = 105f,
+                        useCenter = false,
+                        topLeft = Offset(18.dp.toPx(), 18.dp.toPx()),
+                        size = Size(size.width - 36.dp.toPx(), size.height - 36.dp.toPx()),
+                        style = Stroke(width = 5.dp.toPx())
+                    )
+                    drawArc(
+                        color = statusColor.copy(alpha = 0.35f),
+                        startAngle = sweep.value + 180f,
+                        sweepAngle = 55f,
+                        useCenter = false,
+                        topLeft = Offset(28.dp.toPx(), 28.dp.toPx()),
+                        size = Size(size.width - 56.dp.toPx(), size.height - 56.dp.toPx()),
+                        style = Stroke(width = 3.dp.toPx())
+                    )
+                } else {
+                    drawCircle(
+                        color = statusColor.copy(alpha = 0.08f),
+                        radius = baseRadius + 16.dp.toPx(),
+                        center = center,
+                        style = Stroke(width = 3.dp.toPx())
+                    )
+                }
+                drawCircle(color = statusColor.copy(alpha = 0.16f), radius = baseRadius + 5.dp.toPx(), center = center)
+                drawCircle(color = statusColor, radius = baseRadius, center = center)
+                drawCircle(color = Color(0xFF080B10), radius = baseRadius * 0.38f, center = center)
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                if (running) "FTP SERVER ONLINE" else "FTP SERVER OFFLINE",
+                style = MaterialTheme.typography.labelLarge,
+                color = statusColor
+            )
+        }
+    }
+
+    @Composable
+    private fun ServerTab() {
+'''
+        s = replace_once(s, marker, animation, "ServerTab declaration")
+
+    old_status = '''            Text(
+                if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED"
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+'''
+    new_status = '''            ServerStatusAnimation(serverRunning)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED"
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+'''
+    if old_status in s:
+        s = s.replace(old_status, new_status, 1)
 
     MAIN.write_text(s, encoding="utf-8")
-    print("NetFTPLab fixes applied")
+    print("NetFTPLab fixes and server animation applied")
 
 
 if __name__ == "__main__":
