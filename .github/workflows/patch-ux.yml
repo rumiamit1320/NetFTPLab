@@ -1,0 +1,79 @@
+name: One-time UX and Download Patch
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch MainActivity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
+          s=p.read_text()
+          s=s.replace('import android.content.Context\n', 'import android.content.Context\nimport android.content.ContentValues\n')
+          s=s.replace('import android.os.Bundle\n', 'import android.os.Bundle\nimport android.os.Environment\n')
+          s=s.replace('import android.provider.OpenableColumns\n', 'import android.provider.OpenableColumns\nimport android.provider.MediaStore\n')
+          s=s.replace('import android.net.Uri\n', 'import android.net.Uri\nimport android.graphics.Bitmap\nimport android.graphics.Color as AndroidColor\nimport android.graphics.Canvas\n')
+          s=s.replace('import androidx.compose.ui.unit.dp\n', 'import androidx.compose.ui.unit.dp\nimport androidx.compose.foundation.Canvas\nimport androidx.compose.ui.graphics.drawscope.Fill\n')
+          s=s.replace('import java.util.*\n', 'import java.util.*\nimport com.google.zxing.BarcodeFormat\nimport com.google.zxing.qrcode.QRCodeWriter\n')
+
+          # Prefer Wi-Fi/LAN interface addresses, never a gateway derived from routing data.
+          old='''    private fun localIpv4(): String? {\n        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager\n        val lp = cm.getLinkProperties(cm.activeNetwork) ?: return null\n        return lp.linkAddresses.firstOrNull { it.address is Inet4Address }?.address?.hostAddress\n    }'''
+          new='''    private fun localIpv4(): String? {\n        val interfaces = try { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() } catch (_: Exception) { emptyList() }\n        val preferred = interfaces.sortedBy { iface -> if (iface.name.equals("wlan0", true) || iface.name.startsWith("wlan", true)) 0 else 1 }\n        for (iface in preferred) {\n            if (!iface.isUp || iface.isLoopback) continue\n            for (address in iface.inetAddresses.toList()) {\n                val ip = address.hostAddress ?: continue\n                if (address is Inet4Address && !address.isLoopbackAddress && !address.isLinkLocalAddress) return ip\n            }\n        }\n        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager\n        val lp = cm.activeNetwork?.let { cm.getLinkProperties(it) }\n        return lp?.linkAddresses?.firstOrNull { it.address is Inet4Address && !it.address.isLoopbackAddress && !it.address.isLinkLocalAddress }?.address?.hostAddress\n    }'''
+          if old not in s: raise SystemExit('localIpv4 block not found')
+          s=s.replace(old,new)
+
+          # Save incoming/server files to the normal public Downloads folder.
+          start=s.index('    private fun saveServerFileToPhone(file: File) {')
+          end=s.index('\n    private fun deleteServerFile', start)
+          replacement='''    private fun saveServerFileToPhone(file: File) {\n        lifecycleScope.launch(Dispatchers.IO) {\n            try {\n                val source = file.canonicalFile\n                if (!source.path.startsWith(serverRoot.canonicalPath + File.separator) || !source.isFile) throw IOException("Invalid shared file")\n                if (android.os.Build.VERSION.SDK_INT >= 29) {\n                    val values = ContentValues().apply {\n                        put(MediaStore.Downloads.DISPLAY_NAME, source.name)\n                        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")\n                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/NetFTPLab")\n                        put(MediaStore.Downloads.IS_PENDING, 1)\n                    }\n                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)\n                        ?: throw IOException("Cannot create Downloads entry")\n                    try {\n                        contentResolver.openOutputStream(uri)?.use { output -> source.inputStream().use { it.copyTo(output, 64 * 1024) } }\n                            ?: throw IOException("Cannot open Downloads output")\n                        values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)\n                        contentResolver.update(uri, values, null, null)\n                    } catch (e: Exception) {\n                        contentResolver.delete(uri, null, null)\n                        throw e\n                    }\n                    withContext(Dispatchers.Main) {\n                        transfer = TransferState(direction = "SERVER → DOWNLOADS", name = source.name, done = source.length(), total = source.length(), message = "Saved to Downloads/NetFTPLab")\n                    }\n                    log("DATA", "Saved ${source.name} to public Downloads/NetFTPLab (${source.length()} bytes)")\n                } else {\n                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "NetFTPLab").apply { mkdirs() }\n                    val destination = File(dir, source.name).canonicalFile\n                    source.inputStream().use { input -> destination.outputStream().use { output -> input.copyTo(output, 64 * 1024) } }\n                    transfer = TransferState(direction = "SERVER → DOWNLOADS", name = source.name, done = destination.length(), total = destination.length(), message = "Saved to Downloads/NetFTPLab")\n                    log("DATA", "Saved ${source.name} to public Downloads/NetFTPLab (${destination.length()} bytes)")\n                }\n            } catch (e: Exception) {\n                log("ERROR", "Saving to Downloads failed: ${e.message}")\n            }\n        }\n    }\n'''
+          s=s[:start]+replacement+s[end:]
+
+          # Console copy button.
+          marker='''    @Composable\n    private fun ConsoleTab() {'''
+          idx=s.index(marker)
+          button='''    private fun copyConsoleLog() {\n        val text = logs.joinToString("\\n") { "${it.time} ${it.layer.padEnd(10)} ${it.text}" }\n        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager\n        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("NetFTP Lab Console", text))\n        log("UI", "Console log copied to clipboard (${logs.size} lines)")\n    }\n\n'''
+          s=s[:idx]+button+s[idx:]
+          s=s.replace('''                TextButton(onClick = { logs.clear() }) { Text("Clear") }''','''                TextButton(onClick = { copyConsoleLog() }) { Text("Copy") }\n                TextButton(onClick = { logs.clear() }) { Text("Clear") }''')
+
+          # Make device and transfer lists consume remaining space and scroll correctly.
+          s=s.replace('''            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                items(discovered)''','''            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                items(discovered)''')
+          s=s.replace('''            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                items(remoteFiles)''','''            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                items(remoteFiles)''')
+
+          # Ensure the server endpoint always has a visible QR button.
+          s=s.replace('''            OutlinedButton(\n                onClick = { showQr = true },\n                modifier = Modifier.fillMaxWidth()\n            ) { Text("Show FTP Endpoint") }''','''            OutlinedButton(\n                onClick = { showQr = true },\n                enabled = localIpv4() != null,\n                modifier = Modifier.fillMaxWidth()\n            ) { Text("Show QR / FTP Endpoint") }''')
+
+          # Replace the QR dialog body with a real ZXing-generated QR rendered by Compose Canvas.
+          q=s.index('    @Composable\n    private fun QrDialog() {')
+          # Find next function or class closing by known following section; current QrDialog is near end.
+          tail=s.index('\n    }\n}', q)+6
+          qr='''    @Composable\n    private fun QrDialog() {\n        val ip = localIpv4()\n        val endpoint = if (ip != null) "ftp://$ip:$serverPort" else ""\n        AlertDialog(\n            onDismissRequest = { showQr = false },\n            confirmButton = { TextButton(onClick = { showQr = false }) { Text("Close") } },\n            title = { Text("FTP endpoint") },\n            text = {\n                Column(horizontalAlignment = Alignment.CenterHorizontally) {\n                    if (endpoint.isNotBlank()) {\n                        val matrix = remember(endpoint) { QRCodeWriter().encode(endpoint, BarcodeFormat.QR_CODE, 640, 640) }\n                        Canvas(Modifier.fillMaxWidth().aspectRatio(1f).padding(8.dp)) {\n                            val sx = size.width / matrix.width\n                            val sy = size.height / matrix.height\n                            for (y in 0 until matrix.height) for (x in 0 until matrix.width) {\n                                if (matrix.get(x, y)) drawRect(\n                                    color = Color.Black,\n                                    topLeft = androidx.compose.ui.geometry.Offset(x * sx, y * sy),\n                                    size = androidx.compose.ui.geometry.Size(sx + 0.5f, sy + 0.5f)\n                                )\n                            }\n                        }\n                        Text(endpoint, fontFamily = FontFamily.Monospace)\n                    } else Text("No LAN IPv4 address available")\n                }\n            }\n        )\n    }\n'''
+          s=s[:q]+qr+s[tail:]
+
+          p.write_text(s)
+          PY
+      - name: Patch manifest for Android 8/9 Downloads fallback
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/AndroidManifest.xml')
+          s=p.read_text()
+          if 'android.permission.WRITE_EXTERNAL_STORAGE' not in s:
+              s=s.replace('    <uses-permission android:name="android.permission.INTERNET"/>', '    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>')
+          p.write_text(s)
+          PY
+      - name: Remove this patch workflow and commit
+        run: |
+          rm -f .github/workflows/patch-ux.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/AndroidManifest.xml .github/workflows/patch-ux.yml
+          git commit -m 'Improve LAN IP QR Downloads console and scrolling'
+          git push
