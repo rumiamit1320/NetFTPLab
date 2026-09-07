@@ -16,8 +16,8 @@ jobs:
           p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
           s=p.read_text()
           s2=s.replace('awaitAll()};withContext(Dispatchers.Main)', 'awaitAll();withContext(Dispatchers.Main)')
-          s2=s2.replace('onClick={{ saveServerFileToPhone(f) }}', 'onClick={ { saveServerFileToPhone(f) } }')
-          s2=s2.replace('onClick={{ deleteServerFile(f) }}', 'onClick={ { deleteServerFile(f) } }')
+          s2=s2.replace('onClick={{ saveServerFileToPhone(f) }}', 'onClick={ saveServerFileToPhone(f) }')
+          s2=s2.replace('onClick={{ deleteServerFile(f) }}', 'onClick={ deleteServerFile(f) }')
           if s2==s:
               print('No repair patterns found; nothing to commit.')
           else:
