@@ -2,10 +2,16 @@ package com.netftplab
 
 import android.Manifest
 import android.content.Context
+import android.content.ContentValues
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
+import android.graphics.Canvas
 import android.os.Bundle
+import android.os.Environment
 import android.provider.OpenableColumns
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
 import java.io.*
@@ -32,6 +40,8 @@ import java.net.*
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import kotlin.math.min
 
 data class Device(val ip: String, val host: String = "Unknown", val services: List<Int> = emptyList(), val latencyMs: Long? = null)
@@ -106,9 +116,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun localIpv4(): String? {
+        val interfaces = try { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() } catch (_: Exception) { emptyList() }
+        val preferred = interfaces.sortedBy { iface -> if (iface.name.equals("wlan0", true) || iface.name.startsWith("wlan", true)) 0 else 1 }
+        for (iface in preferred) {
+            if (!iface.isUp || iface.isLoopback) continue
+            for (address in iface.inetAddresses.toList()) {
+                val ip = address.hostAddress ?: continue
+                if (address is Inet4Address && !address.isLoopbackAddress && !address.isLinkLocalAddress) return ip
+            }
+        }
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val lp = cm.getLinkProperties(cm.activeNetwork) ?: return null
-        return lp.linkAddresses.firstOrNull { it.address is Inet4Address }?.address?.hostAddress
+        val lp = cm.activeNetwork?.let { cm.getLinkProperties(it) }
+        return lp?.linkAddresses?.firstOrNull { it.address is Inet4Address && !it.address.isLoopbackAddress && !it.address.isLinkLocalAddress }?.address?.hostAddress
     }
 
     private fun localSubnet(): String? = localIpv4()?.substringBeforeLast('.')
@@ -430,29 +449,38 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val source = file.canonicalFile
-                if (!source.path.startsWith(serverRoot.canonicalPath + File.separator) || !source.isFile) {
-                    throw IOException("Invalid shared file")
-                }
-                val destination = File(transferRoot, source.name).canonicalFile
-                if (!destination.path.startsWith(transferRoot.canonicalPath + File.separator)) {
-                    throw IOException("Unsafe filename")
-                }
-                source.inputStream().use { input ->
-                    destination.outputStream().use { output ->
-                        input.copyTo(output, 64 * 1024)
+                if (!source.path.startsWith(serverRoot.canonicalPath + File.separator) || !source.isFile) throw IOException("Invalid shared file")
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, source.name)
+                        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/NetFTPLab")
+                        put(MediaStore.Downloads.IS_PENDING, 1)
                     }
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IOException("Cannot create Downloads entry")
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { output -> source.inputStream().use { it.copyTo(output, 64 * 1024) } }
+                            ?: throw IOException("Cannot open Downloads output")
+                        values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
+                        contentResolver.update(uri, values, null, null)
+                    } catch (e: Exception) {
+                        contentResolver.delete(uri, null, null)
+                        throw e
+                    }
+                    withContext(Dispatchers.Main) {
+                        transfer = TransferState(direction = "SERVER → DOWNLOADS", name = source.name, done = source.length(), total = source.length(), message = "Saved to Downloads/NetFTPLab")
+                    }
+                    log("DATA", "Saved ${source.name} to public Downloads/NetFTPLab (${source.length()} bytes)")
+                } else {
+                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "NetFTPLab").apply { mkdirs() }
+                    val destination = File(dir, source.name).canonicalFile
+                    source.inputStream().use { input -> destination.outputStream().use { output -> input.copyTo(output, 64 * 1024) } }
+                    transfer = TransferState(direction = "SERVER → DOWNLOADS", name = source.name, done = destination.length(), total = destination.length(), message = "Saved to Downloads/NetFTPLab")
+                    log("DATA", "Saved ${source.name} to public Downloads/NetFTPLab (${destination.length()} bytes)")
                 }
-                transfer = TransferState(
-                    direction = "SERVER → PHONE",
-                    name = source.name,
-                    done = destination.length(),
-                    total = destination.length(),
-                    message = "Saved on phone",
-                    sha256Local = sha256(destination)
-                )
-                log("DATA", "Shared file copied to phone: ${destination.absolutePath}")
             } catch (e: Exception) {
-                log("ERROR", "Could not save shared file to phone: ${e.message}")
+                log("ERROR", "Saving to Downloads failed: ${e.message}")
             }
         }
     }
@@ -561,7 +589,7 @@ class MainActivity : ComponentActivity() {
             }
             Spacer(Modifier.height(12.dp))
             if (discovered.isEmpty()) Text("No devices discovered yet.")
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(discovered) { device ->
                     Card(
                         Modifier.fillMaxWidth().clickable { connect(device) }
@@ -647,7 +675,7 @@ class MainActivity : ComponentActivity() {
             Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
             Text("Tap a remote file to download it to the phone.")
             Spacer(Modifier.height(6.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(remoteFiles) { entry ->
                     Card(
                         Modifier.fillMaxWidth().clickable(
@@ -674,12 +702,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun copyConsoleLog() {
+        val text = logs.joinToString("\n") { "${it.time} ${it.layer.padEnd(10)} ${it.text}" }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("NetFTP Lab Console", text))
+        log("UI", "Console log copied to clipboard (${logs.size} lines)")
+    }
+
     @Composable
     private fun ConsoleTab() {
         Column(Modifier.fillMaxSize().padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("PROTOCOL CONSOLE", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.weight(1f))
+                TextButton(onClick = { copyConsoleLog() }) { Text("Copy") }
                 TextButton(onClick = { logs.clear() }) { Text("Clear") }
             }
             LazyColumn(
@@ -853,25 +889,40 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(6.dp))
             OutlinedButton(
                 onClick = { showQr = true },
+                enabled = localIpv4() != null,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Show FTP Endpoint") }
+            ) { Text("Show QR / FTP Endpoint") }
         }
     }
 
     @Composable
     private fun QrDialog() {
+        val ip = localIpv4()
+        val endpoint = if (ip != null) "ftp://$ip:$serverPort" else ""
         AlertDialog(
             onDismissRequest = { showQr = false },
-            confirmButton = {
-                TextButton(onClick = { showQr = false }) { Text("Close") }
-            },
+            confirmButton = { TextButton(onClick = { showQr = false }) { Text("Close") } },
             title = { Text("FTP endpoint") },
             text = {
-                Text(
-                    "ftp://${localIpv4() ?: "PHONE_IP"}:$serverPort\n\n" +
-                        "Start the server before connecting from the laptop."
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (endpoint.isNotBlank()) {
+                        val matrix = remember(endpoint) { QRCodeWriter().encode(endpoint, BarcodeFormat.QR_CODE, 640, 640) }
+                        Canvas(Modifier.fillMaxWidth().aspectRatio(1f).padding(8.dp)) {
+                            val sx = size.width / matrix.width
+                            val sy = size.height / matrix.height
+                            for (y in 0 until matrix.height) for (x in 0 until matrix.width) {
+                                if (matrix.get(x, y)) drawRect(
+                                    color = Color.Black,
+                                    topLeft = androidx.compose.ui.geometry.Offset(x * sx, y * sy),
+                                    size = androidx.compose.ui.geometry.Size(sx + 0.5f, sy + 0.5f)
+                                )
+                            }
+                        }
+                        Text(endpoint, fontFamily = FontFamily.Monospace)
+                    } else Text("No LAN IPv4 address available")
+                }
             }
         )
     }
+
 }
