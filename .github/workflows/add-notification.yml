@@ -1,0 +1,60 @@
+name: One-time notification patch
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch notification support
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
+          s=p.read_text()
+          old='import android.content.ContentValues\n'
+          new='import android.content.ContentValues\nimport android.app.NotificationChannel\nimport android.app.NotificationManager\nimport androidx.core.app.NotificationCompat\n'
+          if 'import android.app.NotificationChannel' not in s:
+              assert old in s, 'ContentValues import not found'
+              s=s.replace(old,new,1)
+          old='private var showQr by mutableStateOf(false)\n'
+          new='private var showQr by mutableStateOf(false)\n    private val notificationChannelId = "netftp_server"\n'
+          if 'notificationChannelId' not in s:
+              assert old in s, 'showQr state not found'
+              s=s.replace(old,new,1)
+          old='''        server = FtpServer(serverRoot, logger = ::log)\n        refreshServerFiles()'''
+          new='''        server = FtpServer(serverRoot, logger = ::log)\n        createNotificationChannel()\n        refreshServerFiles()'''
+          if 'createNotificationChannel()' not in s:
+              assert old in s, 'server initialization block not found'
+              s=s.replace(old,new,1)
+          old='''    override fun onDestroy() {\n        try { ftp?.close() } catch (_: Exception) { }\n        server.stop()\n        super.onDestroy()\n    }'''
+          new='''    override fun onDestroy() {\n        try { ftp?.close() } catch (_: Exception) { }\n        server.stop()\n        cancelServerNotification()\n        super.onDestroy()\n    }\n\n    private fun createNotificationChannel() {\n        if (android.os.Build.VERSION.SDK_INT >= 26) {\n            val channel = NotificationChannel(\n                notificationChannelId,\n                "NetFTP Server",\n                NotificationManager.IMPORTANCE_LOW\n            ).apply { description = "NetFTP Lab embedded FTP server status" }\n            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)\n        }\n    }\n\n    private fun showServerNotification() {\n        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return\n        val notification = NotificationCompat.Builder(this, notificationChannelId)\n            .setSmallIcon(android.R.drawable.stat_sys_upload)\n            .setContentTitle("NetFTP Lab FTP server")\n            .setContentText("Server running on ${localIpv4() ?: "LAN"}:$serverPort")\n            .setOngoing(true)\n            .setOnlyAlertOnce(true)\n            .setPriority(NotificationCompat.PRIORITY_LOW)\n            .build()\n        getSystemService(NotificationManager::class.java).notify(2121, notification)\n    }\n\n    private fun cancelServerNotification() {\n        getSystemService(NotificationManager::class.java).cancel(2121)\n    }'''
+          if 'private fun showServerNotification()' not in s:
+              assert old in s, 'onDestroy block not found'
+              s=s.replace(old,new,1)
+          old='''            try {\n                server.start()\n                serverRunning = true\n                log("SERVER", "Embedded FTP server active on ${localIpv4() ?: "0.0.0.0"}:$serverPort")'''
+          new='''            try {\n                server.start()\n                serverRunning = true\n                showServerNotification()\n                log("SERVER", "Embedded FTP server active on ${localIpv4() ?: "0.0.0.0"}:$serverPort")'''
+          if 'showServerNotification()' not in s[s.index('private fun toggleServer'):]:
+              assert old in s, 'server start block not found'
+              s=s.replace(old,new,1)
+          old='''            server.stop()\n            serverRunning = false\n            log("SERVER", "Embedded FTP server stopped")'''
+          new='''            server.stop()\n            serverRunning = false\n            cancelServerNotification()\n            log("SERVER", "Embedded FTP server stopped")'''
+          if 'cancelServerNotification()' not in s[s.index('private fun toggleServer'):]:
+              assert old in s, 'server stop block not found'
+              s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+      - name: Remove patch workflow and commit
+        run: |
+          rm -f .github/workflows/add-notification.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/netftplab/MainActivity.kt .github/workflows/add-notification.yml
+          git diff --cached --quiet && { echo 'No changes'; exit 0; }
+          git commit -m 'Add embedded FTP server notification'
+          git push
