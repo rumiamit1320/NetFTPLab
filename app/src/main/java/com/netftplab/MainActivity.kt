@@ -209,7 +209,7 @@ class MainActivity : ComponentActivity() {
                 val localHash = sha256(outFile); val remoteHash = ftp?.remoteSha256(entry.name).orEmpty()
                 val verified = remoteHash.takeIf { it.isNotBlank() }?.let { localHash.equals(it, true) }
                 transfer = transfer.copy(active = false, message = "Complete", sha256Local = localHash, sha256Remote = remoteHash, verified = verified)
-                session = session.copy(bytes = session.bytes + outFile.length(), throughputBps = if (outFile.length() > 0) outFile.length() * 1000 / maxOf(1, System.currentTimeMillis() - started))
+                session = session.copy(bytes = session.bytes + outFile.length(), throughputBps = if (outFile.length() > 0) outFile.length() * 1000 / maxOf(1, System.currentTimeMillis() - started) else 0L)
                 log("DATA", "Saved ${outFile.absolutePath}; SHA-256 $localHash")
             } catch (e: Exception) { transfer = transfer.copy(active = false, message = "Download failed: ${e.message}"); log("ERROR", "Download failed: ${e.message}") }
         }
