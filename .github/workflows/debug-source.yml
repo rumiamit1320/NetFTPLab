@@ -1,4 +1,4 @@
-name: Repair MainActivity
+name: One-time MainActivity Repair
 on:
   push:
     branches: [main]
@@ -6,28 +6,29 @@ permissions:
   contents: write
 jobs:
   repair:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Repair Kotlin syntax
+      - name: Remove duplicate TransfersTab
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p=Path('app/src/main/java/com/netftplab/MainActivity.kt')
           s=p.read_text()
-          s2=s.replace('awaitAll()};withContext(Dispatchers.Main)', 'awaitAll();withContext(Dispatchers.Main)')
-          s2=s2.replace('onClick={{ saveServerFileToPhone(f) }}', 'onClick={ saveServerFileToPhone(f) }')
-          s2=s2.replace('onClick={{ deleteServerFile(f) }}', 'onClick={ deleteServerFile(f) }')
-          if s2==s:
-              print('No repair patterns found; nothing to commit.')
-          else:
-              p.write_text(s2)
-              print('Applied MainActivity syntax repairs.')
+          marker=' @Composable private fun TransfersTab()'
+          a=s.find(marker)
+          b=s.find(marker,a+len(marker))
+          if a < 0 or b < 0:
+              raise SystemExit('Expected two TransfersTab declarations')
+          s=s[:a]+s[b:]
+          p.write_text(s)
           PY
-          git diff --check
-          if git diff --quiet; then exit 0; fi
+      - name: Commit repair and remove workflow
+        run: |
+          rm -f .github/workflows/debug-source.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/netftplab/MainActivity.kt
-          git commit -m 'Fix MainActivity coroutine and callback syntax'
+          git add app/src/main/java/com/netftplab/MainActivity.kt .github/workflows/debug-source.yml
+          git commit -m 'Remove duplicate TransfersTab and restore class scope'
           git push
