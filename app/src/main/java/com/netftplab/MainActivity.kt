@@ -663,6 +663,9 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun NetFtpApp() {
         var tab by remember { mutableIntStateOf(0) }
+        val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+        val scope = rememberCoroutineScope()
+        val closeDrawer = { scope.launch { drawerState.close() } }
         MaterialTheme(
             colorScheme = darkColorScheme(
                 primary = Color(0xFF60A5FA),
@@ -671,46 +674,66 @@ class MainActivity : ComponentActivity() {
                 surface = Color(0xFF11161E)
             )
         ) {
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = { Text("NetFTP Lab") },
-                        actions = {
-                            IconButton(onClick = { scanNetwork() }) {
-                                Icon(Icons.Default.Refresh, "Scan")
+            ModalNavigationDrawer(
+                drawerState = drawerState,
+                drawerContent = {
+                    AdvancedNetworkDrawer(
+                        drawerState = drawerState,
+                        transfer = transfer,
+                        session = session,
+                        logs = logs,
+                        serverRunning = serverRunning,
+                        connectedTarget = connectedTarget,
+                        onClose = closeDrawer
+                    )
+                }
+            ) {
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            navigationIcon = {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(Icons.Default.Menu, "Advanced network monitor")
+                                }
+                            },
+                            title = { Text("NetFTP Lab") },
+                            actions = {
+                                IconButton(onClick = { scanNetwork() }) {
+                                    Icon(Icons.Default.Refresh, "Scan")
+                                }
+                            }
+                        )
+                    },
+                    bottomBar = {
+                        NavigationBar {
+                            val tabs = listOf(
+                                "Devices" to Icons.Default.Devices,
+                                "Transfers" to Icons.Default.SwapVert,
+                                "Console" to Icons.Default.Terminal,
+                                "Network Lab" to Icons.Default.Timeline,
+                                "Server" to Icons.Default.Settings
+                            )
+                            tabs.forEachIndexed { index, item ->
+                                NavigationBarItem(
+                                    selected = tab == index,
+                                    onClick = { tab = index },
+                                    icon = { Icon(item.second, null) },
+                                    label = { Text(item.first) }
+                                )
                             }
                         }
-                    )
-                },
-                bottomBar = {
-                    NavigationBar {
-                        val tabs = listOf(
-                            "Devices" to Icons.Default.Devices,
-                            "Transfers" to Icons.Default.SwapVert,
-                            "Console" to Icons.Default.Terminal,
-                            "Network Lab" to Icons.Default.Timeline,
-                            "Server" to Icons.Default.Settings
-                        )
-                        tabs.forEachIndexed { index, item ->
-                            NavigationBarItem(
-                                selected = tab == index,
-                                onClick = { tab = index },
-                                icon = { Icon(item.second, null) },
-                                label = { Text(item.first) }
-                            )
+                    }
+                ) { padding ->
+                    Box(Modifier.padding(padding).fillMaxSize()) {
+                        when (tab) {
+                            0 -> DevicesTab()
+                            1 -> TransfersTab()
+                            2 -> ConsoleTab()
+                            3 -> NetworkLabTab()
+                            else -> ServerTab()
                         }
+                        if (showQr) QrDialog()
                     }
-                }
-            ) { padding ->
-                Box(Modifier.padding(padding).fillMaxSize()) {
-                    when (tab) {
-                        0 -> DevicesTab()
-                        1 -> TransfersTab()
-                        2 -> ConsoleTab()
-                        3 -> NetworkLabTab()
-                        else -> ServerTab()
-                    }
-                    if (showQr) QrDialog()
                 }
             }
         }
