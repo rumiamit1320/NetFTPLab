@@ -16,7 +16,7 @@ def main() -> None:
         var tab by remember { mutableIntStateOf(0) }
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
-        val closeDrawer = { scope.launch { drawerState.close() } }
+        val closeDrawer: () -> Unit = { scope.launch { drawerState.close() }; Unit }
         MaterialTheme(
             colorScheme = darkColorScheme(
                 primary = Color(0xFF60A5FA),
