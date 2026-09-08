@@ -324,7 +324,8 @@ class MainActivity : ComponentActivity() {
         uploadQueueRunning = true
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
-                val uri = uploadQueue.removeFirstOrNull() ?: break
+                val uri = if (uploadQueue.isEmpty()) break
+                uploadQueue.removeFirst()
                 uploadUriNow(uri)
             }
             withContext(Dispatchers.Main) { uploadQueueRunning = false }
@@ -393,7 +394,8 @@ class MainActivity : ComponentActivity() {
         downloadQueueRunning = true
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
-                val entry = downloadQueue.removeFirstOrNull() ?: break
+                val entry = if (downloadQueue.isEmpty()) break
+                downloadQueue.removeFirst()
                 downloadNow(entry)
             }
             withContext(Dispatchers.Main) { downloadQueueRunning = false }
@@ -433,7 +435,7 @@ class MainActivity : ComponentActivity() {
                     )
                     publishToDownloads(outFile, entry.name)
                     log("DATA", "Download cache already complete; published ${entry.name} to Downloads")
-                    return@launch
+                    return@downloadNow
                 }
 
                 val resume = if (existing > 0L && total > 0L) min(existing, total) else 0L
@@ -833,12 +835,15 @@ class MainActivity : ComponentActivity() {
                             Text("Remote directory: ${remoteFiles.size} entries")
                         }
                         Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             Button(
                                 onClick = { uploadDocument.launch(arrayOf("*/*")) },
-                                enabled = connectedTarget.isNotBlank() && !uploadQueueRunning,
+                                enabled = connectedTarget.isNotBlank(),
                                 modifier = Modifier.weight(1f)
-                            ) { Text("Select files") }
+                            ) { Text("Upload") }
                             OutlinedButton(
                                 onClick = { refreshRemote() },
                                 enabled = connectedTarget.isNotBlank(),
@@ -861,14 +866,18 @@ class MainActivity : ComponentActivity() {
                             Text("${transfer.direction}: ${transfer.name}")
                             if (transfer.total > 0) {
                                 LinearProgressIndicator(
-                                    progress = { (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f) },
+                                    progress = {
+                                        (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f)
+                                    },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
                             Text("${transfer.message} • ${transfer.done}/${transfer.total} bytes • ${transfer.speedBps} B/s")
                             if (transfer.sha256Local.isNotBlank()) Text("SHA-256 local: ${transfer.sha256Local}")
                             if (transfer.sha256Remote.isNotBlank()) Text("SHA-256 remote: ${transfer.sha256Remote}")
-                            transfer.verified?.let { Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH") }
+                            transfer.verified?.let {
+                                Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH")
+                            }
                         }
                     }
                 }
@@ -876,49 +885,23 @@ class MainActivity : ComponentActivity() {
 
             item {
                 Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
-                Text("Select multiple files, then download them sequentially to the phone.")
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(
-                        onClick = {
-                            selectedRemoteNames.clear()
-                            selectedRemoteNames.addAll(remoteFiles.filterNot { it.directory }.map { it.name })
-                        },
-                        enabled = connectedTarget.isNotBlank() && remoteFiles.any { !it.directory },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Select all") }
-                    OutlinedButton(
-                        onClick = { selectedRemoteNames.clear() },
-                        enabled = selectedRemoteNames.isNotEmpty(),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Clear") }
-                    Button(
-                        onClick = {
-                            queueDownloads(remoteFiles.filter { selectedRemoteNames.contains(it.name) })
-                        },
-                        enabled = connectedTarget.isNotBlank() && selectedRemoteNames.isNotEmpty() && !downloadQueueRunning,
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Download (${selectedRemoteNames.size})") }
-                }
+                Text("Tap a remote file to download it to the phone.")
             }
 
             items(remoteFiles) { entry ->
-                val selected = selectedRemoteNames.contains(entry.name)
-                Card(Modifier.fillMaxWidth().clickable(enabled = connectedTarget.isNotBlank() && !entry.directory) {
-                    if (selected) selectedRemoteNames.remove(entry.name) else selectedRemoteNames.add(entry.name)
-                }) {
-                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (!entry.directory) {
-                            Checkbox(
-                                checked = selected,
-                                onCheckedChange = { checked ->
-                                    if (checked) selectedRemoteNames.add(entry.name) else selectedRemoteNames.remove(entry.name)
-                                }
-                            )
-                        } else {
-                            Spacer(Modifier.width(48.dp))
-                        }
-                        Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                Card(
+                    Modifier.fillMaxWidth().clickable(
+                        enabled = connectedTarget.isNotBlank() && !entry.directory
+                    ) { download(entry) }
+                ) {
+                    Row(
+                        Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                            null
+                        )
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(entry.name)
