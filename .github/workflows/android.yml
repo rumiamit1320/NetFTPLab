@@ -16,6 +16,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Restore stable MainActivity baseline
+        run: git checkout 0d5d1d1ecad5cf9573339596f54b5c6c6f5e7b79 -- app/src/main/java/com/netftplab/MainActivity.kt
+
       - name: Apply NetFTP fixes
         run: python3 tools/apply_netftp_fixes.py
 
