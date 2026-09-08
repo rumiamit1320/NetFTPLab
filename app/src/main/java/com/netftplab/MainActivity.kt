@@ -1038,13 +1038,6 @@ class MainActivity : ComponentActivity() {
             Text("Embedded FTP Server", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(8.dp))
             ServerStatusAnimation(serverRunning)
-            Spacer(Modifier.height(4.dp))
-            ServerStatusAnimation(serverRunning)
-            Spacer(Modifier.height(4.dp))
-            ServerStatusAnimation(serverRunning)
-            Spacer(Modifier.height(4.dp))
-            ServerStatusAnimation(serverRunning)
-            Spacer(Modifier.height(4.dp))
             Text(
                 if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED"
             )
