@@ -1,23 +1,19 @@
 from pathlib import Path
+import re
 
 MAIN = Path("app/src/main/java/com/netftplab/MainActivity.kt")
-
-
-def replace_once(text: str, old: str, new: str, label: str) -> str:
-    if old not in text:
-        raise SystemExit(f"Required marker not found: {label}")
-    return text.replace(old, new, 1)
 
 
 def main() -> None:
     s = MAIN.read_text(encoding="utf-8")
 
-    # The server-status animation is a UI element only. Keep exactly one
-    # instance; do not alter FtpServer or any networking/server lifecycle code.
-    duplicate_animation = '''            ServerStatusAnimation(serverRunning)\n            Spacer(Modifier.height(4.dp))\n            ServerStatusAnimation(serverRunning)\n'''
-    single_animation = '''            ServerStatusAnimation(serverRunning)\n'''
-    if duplicate_animation in s:
-        s = s.replace(duplicate_animation, single_animation, 1)
+    # UI-only server status indicator: keep exactly one instance. Never touch
+    # FtpServer.kt, ports, lifecycle, sockets, or transfer protocol behavior.
+    s = re.sub(
+        r"(?:            ServerStatusAnimation\(serverRunning\)\n(?:            Spacer\(Modifier\.height\(4\.dp\)\)\n)*)+",
+        "            ServerStatusAnimation(serverRunning)\n",
+        s,
+    )
 
     start = s.find("    @Composable\n    private fun TransfersTab() {")
     end = s.find("\n    private fun copyConsoleLog()", start)
@@ -126,7 +122,7 @@ def main() -> None:
 
     s = s[:start] + transfers_tab + s[end:]
     MAIN.write_text(s, encoding="utf-8")
-    print("Transfer tab made fully scrollable; server animation kept UI-only")
+    print("Transfer tab made fully scrollable; server networking untouched")
 
 
 if __name__ == "__main__":
