@@ -329,6 +329,9 @@ class MainActivity : ComponentActivity() {
                 uploadUriNow(uri)
             }
             withContext(Dispatchers.Main) { uploadQueueRunning = false }
+            // Refresh only after the complete upload queue has finished, so
+            // LIST cannot overlap the next upload's SIZE/EPSV/STOR sequence.
+            refreshRemote()
         }
     }
 
@@ -378,8 +381,6 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 transfer = transfer.copy(active = false, message = "Upload failed: ${e.message}")
                 log("ERROR", "Upload failed: ${e.message}")
-            } finally {
-                refreshRemote()
             }
     }
 
@@ -849,7 +850,7 @@ class MainActivity : ComponentActivity() {
                             ) { Text("Upload files") }
                             OutlinedButton(
                                 onClick = { refreshRemote() },
-                                enabled = connectedTarget.isNotBlank(),
+                                enabled = connectedTarget.isNotBlank() && !uploadQueueRunning && !downloadQueueRunning,
                                 modifier = Modifier.weight(1f)
                             ) { Text("Refresh") }
                             OutlinedButton(
