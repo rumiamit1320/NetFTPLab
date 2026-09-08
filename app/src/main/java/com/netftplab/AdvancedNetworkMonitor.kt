@@ -151,8 +151,11 @@ private fun readWifiSnapshot(context: Context): WifiSnapshot = try {
     WifiSnapshot(rssi, freq, if (android.os.Build.VERSION.SDK_INT >= 31) info.rxLinkSpeedMbps else 0, if (android.os.Build.VERSION.SDK_INT >= 31) info.txLinkSpeedMbps else 0, "$standard • $band", width, snr, if (rssi > -127) assumedNoise else null, classifyNoise(rssi, snr, band), confidence)
 } catch (_: Exception) { WifiSnapshot() }
 
-@Suppress("DEPRECATION") private fun readChannelWidth(info: WifiInfo): String = try {
-    when (info.channelWidth) { 0 -> "20 MHz"; 1 -> "40 MHz"; 2 -> "80 MHz"; 3 -> "160 MHz"; 4 -> "80+80 MHz"; else -> "Unknown" }
+private fun readChannelWidth(info: WifiInfo): String = try {
+    val field = WifiInfo::class.java.getDeclaredField("channelWidth")
+    field.isAccessible = true
+    val width = field.getInt(info)
+    when (width) { 0 -> "20 MHz"; 1 -> "40 MHz"; 2 -> "80 MHz"; 3 -> "160 MHz"; 4 -> "80+80 MHz"; else -> "Unknown" }
 } catch (_: Throwable) { "Unknown" }
 private fun classifyNoise(rssi: Int, snr: Int?, band: String): String = if (rssi <= -127 || snr == null) "Unavailable" else when {
     snr >= 35 -> "Low / background noise"; snr >= 22 -> "Moderate interference likely"; band == "2.4 GHz" && snr < 15 -> "High interference; co/adjacent-channel possible"; snr < 15 -> "High interference / weak signal"; else -> "Moderate noise"
