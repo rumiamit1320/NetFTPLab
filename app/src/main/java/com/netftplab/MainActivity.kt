@@ -324,8 +324,8 @@ class MainActivity : ComponentActivity() {
         uploadQueueRunning = true
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
-                val uri = if (uploadQueue.isEmpty()) break
-                uploadQueue.removeFirst()
+                if (uploadQueue.isEmpty()) break
+                val uri = uploadQueue.removeFirst()
                 uploadUriNow(uri)
             }
             withContext(Dispatchers.Main) { uploadQueueRunning = false }
@@ -394,8 +394,8 @@ class MainActivity : ComponentActivity() {
         downloadQueueRunning = true
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
-                val entry = if (downloadQueue.isEmpty()) break
-                downloadQueue.removeFirst()
+                if (downloadQueue.isEmpty()) break
+                val entry = downloadQueue.removeFirst()
                 downloadNow(entry)
             }
             withContext(Dispatchers.Main) { downloadQueueRunning = false }
@@ -435,7 +435,7 @@ class MainActivity : ComponentActivity() {
                     )
                     publishToDownloads(outFile, entry.name)
                     log("DATA", "Download cache already complete; published ${entry.name} to Downloads")
-                    return@downloadNow
+                    return
                 }
 
                 val resume = if (existing > 0L && total > 0L) min(existing, total) else 0L
