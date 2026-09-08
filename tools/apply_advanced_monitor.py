@@ -1,6 +1,7 @@
 from pathlib import Path
 
 MAIN = Path("app/src/main/java/com/netftplab/MainActivity.kt")
+ADV = Path("app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt")
 
 
 def main() -> None:
@@ -92,7 +93,28 @@ def main() -> None:
 '''
     s = s[:start] + replacement + s[end:]
     MAIN.write_text(s, encoding="utf-8")
-    print("Added left-side Advanced Network Monitor drawer; FTP architecture untouched")
+
+    # WifiInfo.channelWidth is not available in all compile SDK/API combinations.
+    # Read it reflectively so the monitor remains build-compatible without changing
+    # the FTP/server architecture or the rest of the telemetry logic.
+    if ADV.exists():
+        a = ADV.read_text(encoding="utf-8")
+        old = '''@Suppress("DEPRECATION") private fun readChannelWidth(info: WifiInfo): String = try {
+    when (info.channelWidth) { 0 -> "20 MHz"; 1 -> "40 MHz"; 2 -> "80 MHz"; 3 -> "160 MHz"; 4 -> "80+80 MHz"; else -> "Unknown" }
+} catch (_: Throwable) { "Unknown" }'''
+        new = '''private fun readChannelWidth(info: WifiInfo): String = try {
+    val field = WifiInfo::class.java.getDeclaredField("channelWidth")
+    field.isAccessible = true
+    val width = field.getInt(info)
+    when (width) { 0 -> "20 MHz"; 1 -> "40 MHz"; 2 -> "80 MHz"; 3 -> "160 MHz"; 4 -> "80+80 MHz"; else -> "Unknown" }
+} catch (_: Throwable) { "Unknown" }'''
+        if old in a:
+            a = a.replace(old, new)
+        elif 'info.channelWidth' in a:
+            raise SystemExit("Unexpected channelWidth source; refusing unsafe replacement")
+        ADV.write_text(a, encoding="utf-8")
+
+    print("Added left-side Advanced Network Monitor drawer; fixed channel-width API compatibility; FTP architecture untouched")
 
 
 if __name__ == "__main__":
