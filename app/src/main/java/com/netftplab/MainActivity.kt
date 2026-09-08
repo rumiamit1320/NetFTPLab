@@ -212,7 +212,11 @@ class MainActivity : ComponentActivity() {
                             } catch (_: Exception) { }
                         }
                         if (open.isNotEmpty()) {
-                            found += Device(ip, services = open, latencyMs = latency)
+                            val resolvedName = try {
+                                val hostName = InetAddress.getByName(ip).canonicalHostName
+                                if (hostName.isNullOrBlank() || hostName == ip) "Unknown" else hostName
+                            } catch (_: Exception) { "Unknown" }
+                            found += Device(ip, host = resolvedName, services = open, latencyMs = latency)
                         }
                     }
                 }.awaitAll()
@@ -757,9 +761,14 @@ class MainActivity : ComponentActivity() {
                         Modifier.fillMaxWidth().clickable { connect(device) }
                     ) {
                         Column(Modifier.padding(14.dp)) {
-                            Text(device.ip, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "Services: ${device.services.joinToString()}" +
+                                if (device.host.isBlank() || device.host == "Unknown") device.ip
+                                else device.host,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                "IP: ${device.ip}" +
+                                    " • Services: ${device.services.joinToString()}" +
                                     (device.latencyMs?.let { " • $it ms" } ?: "")
                             )
                         }
