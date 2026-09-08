@@ -748,92 +748,96 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun TransfersTab() {
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("FTP CLIENT CONNECTION", style = MaterialTheme.typography.labelLarge)
-                    Text(
-                        if (connectedTarget.isBlank()) "NOT CONNECTED" else "CONNECTED • $connectedTarget",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    if (connectedTarget.isBlank()) {
-                        Text("Select an FTP device from Devices to enable client transfers.")
-                    } else {
-                        Text("Control channel: TCP ${connectedTarget.substringAfter(':')}")
-                        Text("Remote directory: ${remoteFiles.size} entries")
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Button(
-                            onClick = { uploadDocument.launch(arrayOf("*/*")) },
-                            enabled = connectedTarget.isNotBlank(),
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Upload") }
-                        OutlinedButton(
-                            onClick = { refreshRemote() },
-                            enabled = connectedTarget.isNotBlank(),
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Refresh") }
-                        OutlinedButton(
-                            onClick = { disconnect() },
-                            enabled = connectedTarget.isNotBlank(),
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Disconnect") }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            if (transfer.active || transfer.message != "Idle") {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp)) {
-                        Text("${transfer.direction}: ${transfer.name}")
-                        if (transfer.total > 0) {
-                            LinearProgressIndicator(
-                                progress = {
-                                    (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f)
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                        Text("FTP CLIENT CONNECTION", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            if (connectedTarget.isBlank()) "NOT CONNECTED" else "CONNECTED • $connectedTarget",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        if (connectedTarget.isBlank()) {
+                            Text("Select an FTP device from Devices to enable client transfers.")
+                        } else {
+                            Text("Control channel: TCP ${connectedTarget.substringAfter(':')}")
+                            Text("Remote directory: ${remoteFiles.size} entries")
                         }
-                        Text("${transfer.message} • ${transfer.done}/${transfer.total} bytes • ${transfer.speedBps} B/s")
-                        if (transfer.sha256Local.isNotBlank()) Text("SHA-256 local: ${transfer.sha256Local}")
-                        if (transfer.sha256Remote.isNotBlank()) Text("SHA-256 remote: ${transfer.sha256Remote}")
-                        transfer.verified?.let {
-                            Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH")
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Button(
+                                onClick = { uploadDocument.launch(arrayOf("*/*")) },
+                                enabled = connectedTarget.isNotBlank(),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Upload") }
+                            OutlinedButton(
+                                onClick = { refreshRemote() },
+                                enabled = connectedTarget.isNotBlank(),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Refresh") }
+                            OutlinedButton(
+                                onClick = { disconnect() },
+                                enabled = connectedTarget.isNotBlank(),
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Disconnect") }
                         }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
             }
 
-            Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
-            Text("Tap a remote file to download it to the phone.")
-            Spacer(Modifier.height(6.dp))
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(remoteFiles) { entry ->
-                    Card(
-                        Modifier.fillMaxWidth().clickable(
-                            enabled = connectedTarget.isNotBlank() && !entry.directory
-                        ) { download(entry) }
-                    ) {
-                        Row(
-                            Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                                null
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column {
-                                Text(entry.name)
-                                Text(if (entry.directory) "Directory" else "${entry.size} bytes")
+            if (transfer.active || transfer.message != "Idle") {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text("${transfer.direction}: ${transfer.name}")
+                            if (transfer.total > 0) {
+                                LinearProgressIndicator(
+                                    progress = {
+                                        (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
+                            Text("${transfer.message} • ${transfer.done}/${transfer.total} bytes • ${transfer.speedBps} B/s")
+                            if (transfer.sha256Local.isNotBlank()) Text("SHA-256 local: ${transfer.sha256Local}")
+                            if (transfer.sha256Remote.isNotBlank()) Text("SHA-256 remote: ${transfer.sha256Remote}")
+                            transfer.verified?.let {
+                                Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH")
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
+                Text("Tap a remote file to download it to the phone.")
+            }
+
+            items(remoteFiles) { entry ->
+                Card(
+                    Modifier.fillMaxWidth().clickable(
+                        enabled = connectedTarget.isNotBlank() && !entry.directory
+                    ) { download(entry) }
+                ) {
+                    Row(
+                        Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                            null
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(entry.name)
+                            Text(if (entry.directory) "Directory" else "${entry.size} bytes")
                         }
                     }
                 }
