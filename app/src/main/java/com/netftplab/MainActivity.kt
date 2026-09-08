@@ -1037,6 +1037,8 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(4.dp))
             ServerStatusAnimation(serverRunning)
             Spacer(Modifier.height(4.dp))
+            ServerStatusAnimation(serverRunning)
+            Spacer(Modifier.height(4.dp))
             Text(
                 if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED"
             )
