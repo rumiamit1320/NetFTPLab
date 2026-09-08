@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Restore stable MainActivity baseline
         run: git show 0d5d1d1ecad5cf9573339596f54b5c6c6f5e7b79:app/src/main/java/com/netftplab/MainActivity.kt > app/src/main/java/com/netftplab/MainActivity.kt
