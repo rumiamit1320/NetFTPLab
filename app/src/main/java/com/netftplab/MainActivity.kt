@@ -816,6 +816,9 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun TransfersTab() {
+        val selectableFiles = remoteFiles.filterNot { it.directory }
+        val selectedCount = selectedRemoteNames.size
+
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -843,7 +846,7 @@ class MainActivity : ComponentActivity() {
                                 onClick = { uploadDocument.launch(arrayOf("*/*")) },
                                 enabled = connectedTarget.isNotBlank(),
                                 modifier = Modifier.weight(1f)
-                            ) { Text("Upload") }
+                            ) { Text("Upload files") }
                             OutlinedButton(
                                 onClick = { refreshRemote() },
                                 enabled = connectedTarget.isNotBlank(),
@@ -885,19 +888,61 @@ class MainActivity : ComponentActivity() {
 
             item {
                 Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
-                Text("Tap a remote file to download it to the phone.")
+                Text("Select one or more files, then download them sequentially over the existing FTP connection.")
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            selectedRemoteNames.clear()
+                            selectedRemoteNames.addAll(selectableFiles.map { it.name })
+                        },
+                        enabled = selectableFiles.isNotEmpty(),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Select all") }
+                    OutlinedButton(
+                        onClick = { selectedRemoteNames.clear() },
+                        enabled = selectedCount > 0,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Clear") }
+                    Button(
+                        onClick = {
+                            val chosen = remoteFiles.filter { !it.directory && it.name in selectedRemoteNames }
+                            queueDownloads(chosen)
+                        },
+                        enabled = connectedTarget.isNotBlank() && selectedCount > 0 && !downloadQueueRunning,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Download ($selectedCount)") }
+                }
             }
 
             items(remoteFiles) { entry ->
+                val checked = entry.name in selectedRemoteNames
                 Card(
                     Modifier.fillMaxWidth().clickable(
                         enabled = connectedTarget.isNotBlank() && !entry.directory
-                    ) { download(entry) }
+                    ) {
+                        if (checked) selectedRemoteNames.remove(entry.name)
+                        else selectedRemoteNames.add(entry.name)
+                    }
                 ) {
                     Row(
-                        Modifier.padding(14.dp),
+                        Modifier.padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        if (!entry.directory) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { value ->
+                                    if (value) selectedRemoteNames.add(entry.name)
+                                    else selectedRemoteNames.remove(entry.name)
+                                }
+                            )
+                        } else {
+                            Spacer(Modifier.width(48.dp))
+                        }
                         Icon(
                             if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
                             null
