@@ -86,6 +86,11 @@ class MainActivity : ComponentActivity() {
     private var transfer by mutableStateOf(TransferState())
     private var session by mutableStateOf(SessionStats())
     private var showQr by mutableStateOf(false)
+    private val uploadQueue = ArrayDeque<Uri>()
+    private val downloadQueue = ArrayDeque<RemoteEntry>()
+    private var uploadQueueRunning by mutableStateOf(false)
+    private var downloadQueueRunning by mutableStateOf(false)
+    private val selectedRemoteNames = mutableStateListOf<String>()
     private val notificationChannelId = "netftp_server"
 
     private var ftp: FtpClient? = null
@@ -93,8 +98,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var transferRoot: File
     private lateinit var serverRoot: File
 
-    private val uploadDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) uploadUri(uri)
+    private val uploadDocument = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) queueUploads(uris)
     }
 
     private val shareDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -311,7 +316,22 @@ class MainActivity : ComponentActivity() {
             .toList()
     }
 
-    private fun uploadUri(uri: Uri) {
+    private fun queueUploads(uris: List<Uri>) {
+        uploadQueue.addAll(uris)
+        transfer = transfer.copy(active = false, message = "Queued ${uris.size} file(s)")
+        log("DATA", "Queued ${uris.size} file(s) for upload")
+        if (uploadQueueRunning) return
+        uploadQueueRunning = true
+        lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                val uri = uploadQueue.removeFirstOrNull() ?: break
+                uploadUriNow(uri)
+            }
+            withContext(Dispatchers.Main) { uploadQueueRunning = false }
+        }
+    }
+
+    private suspend fun uploadUriNow(uri: Uri) {
         val client = ftp
         if (client == null || connectedTarget.isBlank()) {
             transfer = TransferState(message = "Not connected — select a device in Devices first")
@@ -319,7 +339,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         val name = queryDisplayName(uri) ?: "upload-${System.currentTimeMillis()}"
-        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val size = contentLength(uri)
                 val existing = client.remoteSize(name)
@@ -361,13 +380,29 @@ class MainActivity : ComponentActivity() {
             } finally {
                 refreshRemote()
             }
+    }
+
+    private fun queueDownloads(entries: List<RemoteEntry>) {
+        val files = entries.filterNot { it.directory }
+        if (files.isEmpty()) return
+        downloadQueue.addAll(files)
+        selectedRemoteNames.removeAll(files.map { it.name }.toSet())
+        transfer = transfer.copy(active = false, message = "Queued ${files.size} file(s) for download")
+        log("DATA", "Queued ${files.size} file(s) for download")
+        if (downloadQueueRunning) return
+        downloadQueueRunning = true
+        lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                val entry = downloadQueue.removeFirstOrNull() ?: break
+                downloadNow(entry)
+            }
+            withContext(Dispatchers.Main) { downloadQueueRunning = false }
         }
     }
 
-    private fun download(entry: RemoteEntry) {
+    private suspend fun downloadNow(entry: RemoteEntry) {
         val client = ftp ?: return
         if (entry.directory) return
-        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val outFile = File(transferRoot, entry.name).canonicalFile
                 if (!outFile.path.startsWith(transferRoot.canonicalPath + File.separator)) {
@@ -451,7 +486,6 @@ class MainActivity : ComponentActivity() {
                 transfer = transfer.copy(active = false, message = "Download failed: ${e.message}")
                 log("ERROR", "Download failed: ${e.message}")
             }
-        }
     }
 
     private fun publishToDownloads(source: File, displayName: String) {
@@ -799,15 +833,12 @@ class MainActivity : ComponentActivity() {
                             Text("Remote directory: ${remoteFiles.size} entries")
                         }
                         Spacer(Modifier.height(8.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                             Button(
                                 onClick = { uploadDocument.launch(arrayOf("*/*")) },
-                                enabled = connectedTarget.isNotBlank(),
+                                enabled = connectedTarget.isNotBlank() && !uploadQueueRunning,
                                 modifier = Modifier.weight(1f)
-                            ) { Text("Upload") }
+                            ) { Text("Select files") }
                             OutlinedButton(
                                 onClick = { refreshRemote() },
                                 enabled = connectedTarget.isNotBlank(),
@@ -830,18 +861,14 @@ class MainActivity : ComponentActivity() {
                             Text("${transfer.direction}: ${transfer.name}")
                             if (transfer.total > 0) {
                                 LinearProgressIndicator(
-                                    progress = {
-                                        (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f)
-                                    },
+                                    progress = { (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f) },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
                             Text("${transfer.message} • ${transfer.done}/${transfer.total} bytes • ${transfer.speedBps} B/s")
                             if (transfer.sha256Local.isNotBlank()) Text("SHA-256 local: ${transfer.sha256Local}")
                             if (transfer.sha256Remote.isNotBlank()) Text("SHA-256 remote: ${transfer.sha256Remote}")
-                            transfer.verified?.let {
-                                Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH")
-                            }
+                            transfer.verified?.let { Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH") }
                         }
                     }
                 }
@@ -849,23 +876,49 @@ class MainActivity : ComponentActivity() {
 
             item {
                 Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
-                Text("Tap a remote file to download it to the phone.")
+                Text("Select multiple files, then download them sequentially to the phone.")
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = {
+                            selectedRemoteNames.clear()
+                            selectedRemoteNames.addAll(remoteFiles.filterNot { it.directory }.map { it.name })
+                        },
+                        enabled = connectedTarget.isNotBlank() && remoteFiles.any { !it.directory },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Select all") }
+                    OutlinedButton(
+                        onClick = { selectedRemoteNames.clear() },
+                        enabled = selectedRemoteNames.isNotEmpty(),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Clear") }
+                    Button(
+                        onClick = {
+                            queueDownloads(remoteFiles.filter { selectedRemoteNames.contains(it.name) })
+                        },
+                        enabled = connectedTarget.isNotBlank() && selectedRemoteNames.isNotEmpty() && !downloadQueueRunning,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Download (${selectedRemoteNames.size})") }
+                }
             }
 
             items(remoteFiles) { entry ->
-                Card(
-                    Modifier.fillMaxWidth().clickable(
-                        enabled = connectedTarget.isNotBlank() && !entry.directory
-                    ) { download(entry) }
-                ) {
-                    Row(
-                        Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                            null
-                        )
+                val selected = selectedRemoteNames.contains(entry.name)
+                Card(Modifier.fillMaxWidth().clickable(enabled = connectedTarget.isNotBlank() && !entry.directory) {
+                    if (selected) selectedRemoteNames.remove(entry.name) else selectedRemoteNames.add(entry.name)
+                }) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (!entry.directory) {
+                            Checkbox(
+                                checked = selected,
+                                onCheckedChange = { checked ->
+                                    if (checked) selectedRemoteNames.add(entry.name) else selectedRemoteNames.remove(entry.name)
+                                }
+                            )
+                        } else {
+                            Spacer(Modifier.width(48.dp))
+                        }
+                        Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(entry.name)
