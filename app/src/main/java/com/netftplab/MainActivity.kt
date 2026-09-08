@@ -1034,7 +1034,12 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun ServerTab() {
         LaunchedEffect(Unit) { refreshServerFiles() }
-        Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Column(
+            Modifier.fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
             Text("Embedded FTP Server", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(8.dp))
             ServerStatusAnimation(serverRunning)
@@ -1076,11 +1081,8 @@ class MainActivity : ComponentActivity() {
             Text("Laptop uploads and phone-shared files are stored in this FTP server folder.")
             Spacer(Modifier.height(6.dp))
 
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.weight(1f, fill = false)
-            ) {
-                items(serverFiles) { file ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                serverFiles.forEach { file ->
                     Card(Modifier.fillMaxWidth()) {
                         Row(
                             Modifier.padding(12.dp),
