@@ -597,6 +597,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -983,18 +984,35 @@ class MainActivity : ComponentActivity() {
                 }
                 items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
                     val checked = entry.path in selectedRemoteNames
-                    Card(Modifier.fillMaxWidth().clickable {
-                        if (checked) selectedRemoteNames.remove(entry.path) else selectedRemoteNames.add(entry.path)
-                    }) {
-                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = checked, onCheckedChange = { if (it) selectedRemoteNames.add(entry.path) else selectedRemoteNames.remove(entry.path) })
-                            Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) { Text(entry.name); Text(if (entry.directory) "Folder" else "${entry.size} bytes") }
-                            OutlinedButton(
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(10.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth().clickable {
+                                    if (checked) selectedRemoteNames.remove(entry.path) else selectedRemoteNames.add(entry.path)
+                                },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { if (it) selectedRemoteNames.add(entry.path) else selectedRemoteNames.remove(entry.path) }
+                                )
+                                Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(entry.name)
+                                    Text(if (entry.directory) "Folder • recursive download" else "${entry.size} bytes")
+                                }
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Button(
                                 onClick = { queueDownloads(listOf(entry)) },
-                                enabled = !downloadQueueRunning && !uploadQueueRunning
-                            ) { Text("Download") }
+                                enabled = !downloadQueueRunning && !uploadQueueRunning,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Download, null)
+                                Spacer(Modifier.width(6.dp))
+                                Text(if (entry.directory) "Download Folder" else "Download File")
+                            }
                         }
                     }
                 }

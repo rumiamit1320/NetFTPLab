@@ -53,7 +53,12 @@ fun AdvancedNetworkDrawer(
             val elapsed = max(1L, now - lastTime)
             val delta = max(0L, (rx - lastRx) + (tx - lastTx))
             val appBps = delta * 1000L / elapsed
-            val measured = if (transfer.active && transfer.speedBps > 0L) transfer.speedBps else appBps
+            val measured = when {
+                transfer.active && transfer.speedBps > 0L -> transfer.speedBps
+                transfer.direction == "SERVER → DOWNLOADS" -> 0L
+                transfer.speedBps > 0L && transfer.message.contains("Complete", true) -> transfer.speedBps
+                else -> appBps
+            }
             samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))
             while (samples.size > 90) samples.removeAt(0)
             lastRx = rx; lastTx = tx; lastTime = now
@@ -90,17 +95,23 @@ fun AdvancedNetworkDrawer(
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
             MonitorCard("PACKET / TRANSFER TELEMETRY") {
-                StatRow("ACK events", ackCount.toString()); StatRow("Retransmission indicators", retransmissionCount.toString())
-                StatRow("Collision events", collisionCount.toString()); StatRow("Errors", errorCount.toString())
+                StatRow("TCP ACK packets", "Not exposed")
+                StatRow("Retry / resume indicators", retransmissionCount.toString())
+                StatRow("Wi-Fi collision packets", "Not exposed")
+                StatRow("Application / FTP errors", errorCount.toString())
                 StatRow("RTT (discovery)", if (session.rttMs > 0) "${session.rttMs} ms" else "Not measured")
                 StatRow("Goodput", "${formatMbps(currentMbps)} Mbps")
+                Text("Android app APIs do not expose raw TCP ACK packets, Wi-Fi collision counters, or kernel retransmission packets to this application.", style = MaterialTheme.typography.bodySmall)
             }
             MonitorCard("TCP CONGESTION MODEL") {
                 Text("Educational model — not the Android kernel's actual cwnd", style = MaterialTheme.typography.bodySmall)
                 StatRow("State", if (transfer.active) "TRANSFER ACTIVE" else "IDLE")
                 StatRow("Model", "Reno / CUBIC / BBR — Network Lab")
-                StatRow("Estimated loss", if (retransmissionCount > 0) "Detected" else "No indicator")
-                StatRow("Backoff", if (collisionCount > 0) "Modeled from collision events" else "None observed")
+                StatRow("Measured goodput", "${formatMbps(currentMbps)} Mbps")
+                StatRow("Application loss indicator", if (retransmissionCount > 0) "Detected" else "None observed")
+                StatRow("Kernel cwnd", "Not exposed")
+                StatRow("Wi-Fi backoff", "Not exposed")
+                Text("Use Network Lab for the Reno/CUBIC/BBR mathematical model; this panel supplies measured FTP/application inputs without claiming kernel cwnd or MAC backoff access.", style = MaterialTheme.typography.bodySmall)
             }
             MonitorCard("LIVE RF / WI-FI DIAGNOSTICS") {
                 StatRow("RSSI", if (wifi.rssiDbm > -127) "${wifi.rssiDbm} dBm" else "Unavailable")
@@ -154,7 +165,13 @@ private fun networkStateText(context: Context): String {
     GraphFrame("Mbps") {
         val values = samples.map { it.throughputBps / 125_000.0 }
         val peak = values.maxOrNull() ?: 0.0
-        val maxValue = max(0.05, peak * 1.25)
+        val recentPeak = values.takeLast(30).maxOrNull() ?: 0.0
+        val scalePeak = max(peak, recentPeak)
+        val maxValue = when {
+            scalePeak <= 0.0 -> 0.01
+            scalePeak < 0.1 -> scalePeak * 1.8
+            else -> scalePeak * 1.25
+        }
         drawSeries(values, 0.0, maxValue)
     }
 }
