@@ -58,9 +58,6 @@ jobs:
       - name: Apply single-item download option
         run: python3 tools/apply_single_download_option.py
 
-      - name: Apply monitor and transfer telemetry correction
-        run: python3 tools/apply_monitor_transfer_telemetry_fix.py
-
       - name: Serialize FTP operations
         run: python3 tools/apply_ftp_transfer_serialization.py
 
