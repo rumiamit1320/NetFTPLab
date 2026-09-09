@@ -600,6 +600,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -978,6 +979,12 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(onClick = { selectedRemoteNames.clear() }, enabled = selectedRemoteNames.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Clear") }
                     }
                     Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = { queueDownloads(remoteFiles.filterNot { it.directory }) },
+                        enabled = remoteFiles.any { !it.directory } && connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Download All (${remoteFiles.count { !it.directory }})") }
+                    Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(onClick = { queueDownloads(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning, modifier = Modifier.weight(1f)) { Text("Download (${remoteSelection.size})") }
                         OutlinedButton(onClick = { shareRemoteEntries(remoteSelection) }, enabled = remoteSelection.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Share") }
@@ -986,35 +993,18 @@ class MainActivity : ComponentActivity() {
                 }
                 items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
                     val checked = entry.path in selectedRemoteNames
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(10.dp)) {
-                            Row(
-                                Modifier.fillMaxWidth().clickable {
-                                    if (checked) selectedRemoteNames.remove(entry.path) else selectedRemoteNames.add(entry.path)
-                                },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = checked,
-                                    onCheckedChange = { if (it) selectedRemoteNames.add(entry.path) else selectedRemoteNames.remove(entry.path) }
-                                )
-                                Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(entry.name)
-                                    Text(if (entry.directory) "Folder • recursive download" else "${entry.size} bytes")
-                                }
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Button(
+                    Card(Modifier.fillMaxWidth().clickable {
+                        if (checked) selectedRemoteNames.remove(entry.path) else selectedRemoteNames.add(entry.path)
+                    }) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = checked, onCheckedChange = { if (it) selectedRemoteNames.add(entry.path) else selectedRemoteNames.remove(entry.path) })
+                            Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) { Text(entry.name); Text(if (entry.directory) "Folder" else "${entry.size} bytes") }
+                            OutlinedButton(
                                 onClick = { queueDownloads(listOf(entry)) },
-                                enabled = !downloadQueueRunning && !uploadQueueRunning,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Download, null)
-                                Spacer(Modifier.width(6.dp))
-                                Text(if (entry.directory) "Download Folder" else "Download File")
-                            }
+                                enabled = !downloadQueueRunning && !uploadQueueRunning
+                            ) { Text("Download") }
                         }
                     }
                 }
@@ -1038,9 +1028,6 @@ class MainActivity : ComponentActivity() {
                             Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) { Text(file.name); Text(if (file.isDirectory) "Folder" else "${file.length()} bytes") }
-                            if (file.isFile) {
-                                IconButton(onClick = { saveServerFileToPhone(file) }) { Icon(Icons.Default.Download, "Save to Downloads") }
-                            }
                             IconButton(onClick = { shareFiles(serverSelectionFiles(listOf(file))) }) { Icon(Icons.Default.Share, "Share") }
                             IconButton(onClick = { if (deleteLocalEntry(file)) refreshServerFiles() }) { Icon(Icons.Default.Delete, "Delete") }
                         }
