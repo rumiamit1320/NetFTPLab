@@ -144,6 +144,7 @@ class MainActivity : ComponentActivity() {
         transferRefreshJob?.cancel()
         transferRefreshJob?.cancel()
         transferRefreshJob?.cancel()
+        transferRefreshJob?.cancel()
         try { ftp?.close() } catch (_: Exception) { }
         server.stop()
         cancelServerNotification()
@@ -587,6 +588,7 @@ class MainActivity : ComponentActivity() {
         ).orEmpty()
         serverFiles.addAll(files)
     }
+
 
 
 
