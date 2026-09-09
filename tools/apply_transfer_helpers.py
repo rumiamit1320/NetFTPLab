@@ -42,7 +42,7 @@ HELPERS = r'''    private suspend fun deleteRemoteEntry(entry: RemoteEntry) {
             return
         }
         try {
-            val uris = existing.map { file -> FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", file) }
+            val uris = existing.map { file -> FileProvider.getUriForFile(this, "${packageName}.fileprovider", file) }
             val intent = if (uris.size == 1) {
                 Intent(Intent.ACTION_SEND).apply {
                     type = mimeTypeFor(existing.first().name)
