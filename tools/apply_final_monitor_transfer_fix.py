@@ -1,74 +1,48 @@
 from pathlib import Path
-import re
 
 MAIN = Path("app/src/main/java/com/netftplab/MainActivity.kt")
 MON = Path("app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt")
 
+# Add an explicit Download All action to the existing multi-file transfer UI.
 s = MAIN.read_text(encoding="utf-8")
-if 'Text(if (entry.directory) "Download Folder" else "Download File")' not in s:
-    raise SystemExit("Remote single-download action is missing; refusing an unsafe broad rewrite")
-
-# Explicit all-items action; selected-item Download(N) remains unchanged.
-download_all_button = '''                    Button(
-                        onClick = { queueDownloads(remoteFiles.toList()) },
-                        enabled = remoteFiles.isNotEmpty() && !downloadQueueRunning && !uploadQueueRunning,
+all_button = '''                    Button(
+                        onClick = { queueDownloads(remoteFiles.filterNot { it.directory }) },
+                        enabled = remoteFiles.any { !it.directory } && connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Download All (${remoteFiles.size})") }
-                    Spacer(Modifier.height(6.dp))
+                    ) { Text("Download All (${remoteFiles.count { !it.directory }})") }
 '''
-anchor = '''                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(onClick = { queueDownloads(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning, modifier = Modifier.weight(1f)) { Text("Download (${remoteSelection.size})") }
-                        OutlinedButton(onClick = { shareRemoteEntries(remoteSelection) }, enabled = remoteSelection.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Share") }
-                        OutlinedButton(onClick = { queueDeleteRemote(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning && !uploadQueueRunning, modifier = Modifier.weight(1f)) { Text("Delete") }
-                    }
+if 'Text("Download All (' not in s:
+    anchor = '''                    Button(
+                        onClick = {
+                            val chosen = remoteFiles.filter { !it.directory && it.name in selectedRemoteNames }
+                            queueDownloads(chosen)
+                        },
+                        enabled = connectedTarget.isNotBlank() && selectedCount > 0 && !downloadQueueRunning,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Download ($selectedCount)") }
 '''
-if download_all_button not in s:
     if anchor not in s:
-        raise SystemExit("Remote transfer action row not found")
-    s = s.replace(anchor, anchor + download_all_button, 1)
-
-# Preserve the existing phone-server save action.
-old_local = '''                            Column(Modifier.weight(1f)) { Text(file.name); Text(if (file.isDirectory) "Folder" else "${file.length()} bytes") }
-                            IconButton(onClick = { shareFiles(serverSelectionFiles(listOf(file))) }) { Icon(Icons.Default.Share, "Share") }
-                            IconButton(onClick = { if (deleteLocalEntry(file)) refreshServerFiles() }) { Icon(Icons.Default.Delete, "Delete") }'''
-new_local = '''                            Column(Modifier.weight(1f)) { Text(file.name); Text(if (file.isDirectory) "Folder" else "${file.length()} bytes") }
-                            if (file.isFile) {
-                                IconButton(onClick = { saveServerFileToPhone(file) }) { Icon(Icons.Default.Download, "Save to Downloads") }
-                            }
-                            IconButton(onClick = { shareFiles(serverSelectionFiles(listOf(file))) }) { Icon(Icons.Default.Share, "Share") }
-                            IconButton(onClick = { if (deleteLocalEntry(file)) refreshServerFiles() }) { Icon(Icons.Default.Delete, "Delete") }'''
-if new_local not in s and old_local in s:
-    s = s.replace(old_local, new_local, 1)
+        raise SystemExit("Multi-file Download action marker not found")
+    s = s.replace(anchor, anchor + all_button, 1)
 MAIN.write_text(s, encoding="utf-8")
 
+# Make the long-running sampler observe current Compose state rather than the
+# initial idle TransferState captured when the drawer first opened.
 m = MON.read_text(encoding="utf-8")
-
-# Collapse any duplicate throughput label rows.
-row = '                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")\n'
-m = re.sub(r'(?:' + re.escape(row) + r'){1,}', '                Text("Live app throughput: ${formatMbps(currentMbps)} Mbps")\n', m)
-
-# LaunchedEffect(Unit) otherwise captures the initial idle TransferState and
-# SessionStats. Keep one sampler, but make it observe current Compose state.
-old_state = '''    var wifi by remember { mutableStateOf(WifiSnapshot()) }
-    val samples = remember { mutableStateListOf<LiveNetSample>() }
-    var liveDeviceRxBps by remember { mutableLongStateOf(0L) }
+if 'val latestTransfer = rememberUpdatedState(transfer)' not in m:
+    state_anchor = '''    var liveDeviceRxBps by remember { mutableLongStateOf(0L) }
     var liveDeviceTxBps by remember { mutableLongStateOf(0L) }
     val startMs = remember { System.currentTimeMillis() }
-
-    LaunchedEffect(Unit) {'''
-new_state = '''    var wifi by remember { mutableStateOf(WifiSnapshot()) }
-    val samples = remember { mutableStateListOf<LiveNetSample>() }
-    var liveDeviceRxBps by remember { mutableLongStateOf(0L) }
+'''
+    state_new = '''    var liveDeviceRxBps by remember { mutableLongStateOf(0L) }
     var liveDeviceTxBps by remember { mutableLongStateOf(0L) }
     val latestTransfer = rememberUpdatedState(transfer)
     val latestSession = rememberUpdatedState(session)
     val startMs = remember { System.currentTimeMillis() }
-
-    LaunchedEffect(Unit) {'''
-if new_state not in m:
-    if old_state not in m:
-        raise SystemExit("Monitor state marker not found")
-    m = m.replace(old_state, new_state, 1)
+'''
+    if state_anchor not in m:
+        raise SystemExit("Monitor state anchor not found")
+    m = m.replace(state_anchor, state_new, 1)
 
 old_loop = '''            val transferBps = max(transfer.speedBps, session.throughputBps)
             val measured = when {
@@ -90,14 +64,14 @@ new_loop = '''            val liveTransfer = latestTransfer.value
             samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))'''
 if new_loop not in m:
     if old_loop not in m:
-        raise SystemExit("Monitor sampling loop marker not found")
+        raise SystemExit("Monitor transfer sampling marker not found")
     m = m.replace(old_loop, new_loop, 1)
 
-m = m.replace(
-    'StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps))',
-    'StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps, transfer.direction, transfer.active, transfer.speedBps))',
-    1
-)
+# Show the measured FTP transfer rate in Network State while a transfer is active.
+old_call = 'StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps))'
+new_call = 'StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps, transfer.direction, transfer.active, transfer.speedBps))'
+if new_call not in m and old_call in m:
+    m = m.replace(old_call, new_call, 1)
 
 old_fn = '''private fun networkStateText(context: Context, liveRxBps: Long, liveTxBps: Long): String {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -145,9 +119,9 @@ new_fn = '''private fun networkStateText(
     return "$transport • ${if (validated) "validated" else "local/unvalidated"} • ${if (metered) "metered" else "unmetered"} • $live • $capacity"
 }'''
 if new_fn not in m:
-    if old_fn not in m:
-        raise SystemExit("networkStateText marker not found")
-    m = m.replace(old_fn, new_fn, 1)
-
+    if old_fn in m:
+        m = m.replace(old_fn, new_fn, 1)
+    else:
+        raise SystemExit("Network state function marker not found")
 MON.write_text(m, encoding="utf-8")
-print("Added Download All and fixed live transfer telemetry state capture")
+print("Added Download All and corrected live FTP throughput telemetry")
