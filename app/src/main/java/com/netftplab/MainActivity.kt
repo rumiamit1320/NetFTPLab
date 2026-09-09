@@ -594,6 +594,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -988,7 +989,10 @@ class MainActivity : ComponentActivity() {
                             Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) { Text(entry.name); Text(if (entry.directory) "Folder" else "${entry.size} bytes") }
-                            if (!entry.directory) IconButton(onClick = { queueDownloads(listOf(entry)) }, enabled = !downloadQueueRunning) { Icon(Icons.Default.Download, "Download") }
+                            OutlinedButton(
+                                onClick = { queueDownloads(listOf(entry)) },
+                                enabled = !downloadQueueRunning && !uploadQueueRunning
+                            ) { Text("Download") }
                         }
                     }
                 }

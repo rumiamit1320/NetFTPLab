@@ -84,9 +84,6 @@ fun AdvancedNetworkDrawer(
                 Text("Current ${transfer.direction.ifBlank { "idle" }} • ${transfer.name.ifBlank { "no active transfer" }}")
                 Text("Average ${formatMbps(avgMbps)} Mbps  •  Peak ${formatMbps(peakMbps)} Mbps")
                 Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("Session bytes ${formatBytes(session.bytes)}")
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
