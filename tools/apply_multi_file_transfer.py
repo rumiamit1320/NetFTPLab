@@ -111,6 +111,14 @@ def main():
                 Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
                 Text("Select one or more files, then download them sequentially over the existing FTP connection.")
                 Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = { queueDownloads(remoteFiles.filterNot { it.directory }) },
+                    enabled = connectedTarget.isNotBlank() && selectableFiles.isNotEmpty() && !downloadQueueRunning && !uploadQueueRunning,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Download All (${selectableFiles.size})")
+                }
+                Spacer(Modifier.height(6.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -133,7 +141,7 @@ def main():
                             val chosen = remoteFiles.filter { !it.directory && it.name in selectedRemoteNames }
                             queueDownloads(chosen)
                         },
-                        enabled = connectedTarget.isNotBlank() && selectedCount > 0 && !downloadQueueRunning,
+                        enabled = connectedTarget.isNotBlank() && selectedCount > 0 && !downloadQueueRunning && !uploadQueueRunning,
                         modifier = Modifier.weight(1f)
                     ) { Text("Download ($selectedCount)") }
                 }
@@ -141,37 +149,42 @@ def main():
 
             items(remoteFiles) { entry ->
                 val checked = entry.name in selectedRemoteNames
-                Card(
-                    Modifier.fillMaxWidth().clickable(
-                        enabled = connectedTarget.isNotBlank() && !entry.directory
+                Card(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (checked) selectedRemoteNames.remove(entry.name)
-                        else selectedRemoteNames.add(entry.name)
-                    }
-                ) {
-                    Row(
-                        Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (!entry.directory) {
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = { value ->
-                                    if (value) selectedRemoteNames.add(entry.name)
-                                    else selectedRemoteNames.remove(entry.name)
-                                }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (!entry.directory) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { value ->
+                                        if (value) selectedRemoteNames.add(entry.name)
+                                        else selectedRemoteNames.remove(entry.name)
+                                    }
+                                )
+                            } else {
+                                Spacer(Modifier.width(48.dp))
+                            }
+                            Icon(
+                                if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                null
                             )
-                        } else {
-                            Spacer(Modifier.width(48.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(entry.name)
+                                Text(if (entry.directory) "Directory" else "${entry.size} bytes")
+                            }
                         }
-                        Icon(
-                            if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                            null
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(entry.name)
-                            Text(if (entry.directory) "Directory" else "${entry.size} bytes")
+                        Button(
+                            onClick = { queueDownloads(listOf(entry)) },
+                            enabled = connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (entry.directory) "Download Folder" else "Download File")
                         }
                     }
                 }
@@ -182,7 +195,7 @@ def main():
 '''
     s = s[:start] + transfers + s[end:]
     MAIN.write_text(s, encoding="utf-8")
-    print("Fixed queue compatibility and applied multi-file transfer selection UI")
+    print("Fixed queue compatibility and applied multi-file transfer selection UI with file/folder and Download All controls")
 
 
 if __name__ == "__main__":
