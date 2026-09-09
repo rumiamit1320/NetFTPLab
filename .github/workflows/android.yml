@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: netftplab-main-ci
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -63,8 +67,26 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/cleanup_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_monitor_server_visual_fix.py tools/apply_single_download_option.py tools/apply_ftp_transfer_serialization.py
-          git diff --cached --quiet || git commit -m 'Add explicit single-item download action'
-          git push origin HEAD:main
+          git diff --cached --quiet || git commit -m 'Apply automated NetFTPLab patches'
+
+          # Another CI run can update main while this run is building.
+          # Rebase onto the latest main before pushing, then retry if the
+          # remote advances between fetch and push.
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo 'Rebase conflict while synchronizing main; refusing to overwrite remote history.'
+              exit 1
+            fi
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Push race detected (attempt $attempt); retrying after fetching main..."
+            sleep 2
+          done
+          echo 'Unable to push patched source after 5 attempts.'
+          exit 1
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
