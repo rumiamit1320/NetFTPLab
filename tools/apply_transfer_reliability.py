@@ -272,7 +272,10 @@ def main() -> None:
     }
 
 '''
-    s = replace_function(s, '    private fun publishToDownloads(', '    private fun verifyRemote(', publish_body)
+    if 'private fun publishToDownloads(' in s:
+        s = replace_function(s, '    private fun publishToDownloads(', '    private fun verifyRemote(', publish_body)
+    else:
+        s = s.replace('    private fun verifyRemote(', publish_body + '    private fun verifyRemote(', 1)
 
     # Replace the upload progress callback so telemetry gets real transfer bytes
     # and speed instead of the stale session counters.

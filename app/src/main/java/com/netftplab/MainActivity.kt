@@ -2,10 +2,13 @@ package com.netftplab
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.ClipData
 import android.content.ContentValues
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.FileProvider
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.graphics.Bitmap
@@ -59,7 +62,7 @@ import kotlin.math.min
 data class Device(val ip: String, val host: String = "Unknown", val services: List<Int> = emptyList(), val latencyMs: Long? = null)
 data class LogLine(val time: String, val layer: String, val text: String)
 data class SessionStats(val rttMs: Long = 0, val connected: Boolean = false, val target: String = "", val bytes: Long = 0, val throughputBps: Long = 0)
-data class RemoteEntry(val name: String, val size: Long, val directory: Boolean)
+data class RemoteEntry(val name: String, val size: Long, val directory: Boolean, val path: String = name)
 data class TransferState(
     val active: Boolean = false,
     val direction: String = "",
@@ -91,6 +94,8 @@ class MainActivity : ComponentActivity() {
     private var uploadQueueRunning by mutableStateOf(false)
     private var downloadQueueRunning by mutableStateOf(false)
     private val selectedRemoteNames = mutableStateListOf<String>()
+    private var remoteRefreshRunning = false
+    private var transferRefreshJob: Job? = null
     private val notificationChannelId = "netftp_server"
 
     private var ftp: FtpClient? = null
@@ -122,10 +127,21 @@ class MainActivity : ComponentActivity() {
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        transferRefreshJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(1800)
+                if (serverRunning) withContext(Dispatchers.Main) { refreshServerFiles() }
+                if (ftp != null && connectedTarget.isNotBlank() &&
+                    !uploadQueueRunning && !downloadQueueRunning && !transfer.active && !remoteRefreshRunning) {
+                    refreshRemote()
+                }
+            }
+        }
         setContent { NetFtpApp() }
     }
 
     override fun onDestroy() {
+        transferRefreshJob?.cancel()
         try { ftp?.close() } catch (_: Exception) { }
         server.stop()
         cancelServerNotification()
@@ -249,7 +265,7 @@ class MainActivity : ComponentActivity() {
                 client.login("anonymous", "anonymous@netftp.local")
                 ftp = client
                 connectedTarget = "${device.ip}:$port"
-                session = SessionStats(connected = true, target = connectedTarget)
+                session = SessionStats(rttMs = device.latencyMs ?: 0L, connected = true, target = connectedTarget)
                 log("TCP", "FTP session established to $connectedTarget")
                 refreshRemote()
             } catch (e: Exception) {
@@ -274,45 +290,56 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshRemote() {
-        val client = ftp ?: return
+        val client = ftp
+        if (client == null || connectedTarget.isBlank()) {
+            remoteFiles.clear()
+            selectedRemoteNames.clear()
+            return
+        }
+        if (remoteRefreshRunning) return
+        remoteRefreshRunning = true
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val parsed = parseListing(client.list())
                 withContext(Dispatchers.Main) {
                     remoteFiles.clear()
                     remoteFiles.addAll(parsed)
+                    selectedRemoteNames.retainAll(parsed.map { it.path }.toSet())
                     session = session.copy(connected = true)
                 }
             } catch (e: Exception) {
                 log("ERROR", "LIST failed: ${e.message}")
                 if (client === ftp) {
+                    try { client.close() } catch (_: Exception) { }
                     ftp = null
                     withContext(Dispatchers.Main) {
                         connectedTarget = ""
                         session = SessionStats()
+                        remoteFiles.clear()
+                        selectedRemoteNames.clear()
+                        transfer = TransferState(message = "Remote FTP disconnected")
                     }
                 }
+            } finally {
+                withContext(Dispatchers.Main) { remoteRefreshRunning = false }
             }
         }
     }
 
-    private fun parseListing(text: String): List<RemoteEntry> {
+    private fun parseListing(text: String, basePath: String = ""): List<RemoteEntry> {
+        val normalizedBase = basePath.trim('/').trim()
         return text.lineSequence()
             .mapNotNull { line ->
                 val value = line.trim()
                 if (value.isBlank()) return@mapNotNull null
                 val parts = value.split(Regex("\\s+"), limit = 9)
-                if (parts.size >= 9) {
-                    RemoteEntry(
-                        name = parts[8],
-                        size = parts[4].toLongOrNull() ?: 0L,
-                        directory = parts[0].startsWith("d")
-                    )
-                } else {
-                    RemoteEntry(value, 0L, false)
-                }
+                val name = if (parts.size >= 9) parts[8] else value
+                if (name == "." || name == "..") return@mapNotNull null
+                val directory = parts.size >= 9 && parts[0].startsWith("d")
+                val size = if (parts.size >= 9) parts[4].toLongOrNull() ?: 0L else 0L
+                val path = if (normalizedBase.isBlank()) name else "$normalizedBase/$name"
+                RemoteEntry(name = name, size = size, directory = directory, path = path)
             }
-            .filterNot { it.name == "." || it.name == ".." }
             .toList()
     }
 
@@ -369,12 +396,14 @@ class MainActivity : ComponentActivity() {
                 )
                 client.upload(name, input, size, skip) { done, total ->
                     val elapsed = maxOf(1L, System.currentTimeMillis() - start)
+                    val speed = done * 1000L / elapsed
                     transfer = transfer.copy(
                         done = done,
                         total = total,
-                        speedBps = done * 1000L / elapsed,
+                        speedBps = speed,
                         message = "Transferring"
                     )
+                    session = session.copy(bytes = done, throughputBps = speed)
                 }
                 input.close()
                 verifyRemote(name, uri, size)
@@ -385,164 +414,125 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun queueDownloads(entries: List<RemoteEntry>) {
-        val files = entries.filterNot { it.directory }
-        if (files.isEmpty()) return
-        downloadQueue.addAll(files)
-        selectedRemoteNames.removeAll(files.map { it.name }.toSet())
-        transfer = transfer.copy(active = false, message = "Queued ${files.size} file(s) for download")
-        log("DATA", "Queued ${files.size} file(s) for download")
+        if (entries.isEmpty()) return
+        downloadQueue.addAll(entries)
+        selectedRemoteNames.removeAll(entries.map { it.path }.toSet())
+        transfer = transfer.copy(active = false, message = "Queued ${entries.size} item(s) for download")
+        log("DATA", "Queued ${entries.size} item(s) for download")
         if (downloadQueueRunning) return
         downloadQueueRunning = true
         lifecycleScope.launch(Dispatchers.IO) {
             while (true) {
                 if (downloadQueue.isEmpty()) break
                 val entry = downloadQueue.removeFirst()
-                downloadNow(entry)
+                if (entry.directory) downloadFolderNow(entry)
+                else downloadFileNow(entry)
             }
             withContext(Dispatchers.Main) { downloadQueueRunning = false }
+            refreshRemote()
         }
     }
 
-    private suspend fun downloadNow(entry: RemoteEntry) {
+    private suspend fun downloadFolderNow(folder: RemoteEntry) {
         val client = ftp ?: return
-        if (entry.directory) return
-            try {
-                val outFile = File(transferRoot, entry.name).canonicalFile
-                if (!outFile.path.startsWith(transferRoot.canonicalPath + File.separator)) {
-                    throw IOException("Unsafe filename")
-                }
-
-                val total = client.remoteSize(entry.name).takeIf { it >= 0 } ?: entry.size
-                val existing = if (outFile.exists()) outFile.length() else 0L
-
-                if (total >= 0L && existing >= total) {
-                    val localHash = sha256(outFile)
-                    val remoteHash = client.remoteSha256(entry.name)
-                    val verified = remoteHash.takeIf { it.isNotBlank() }
-                        ?.let { localHash.equals(it, true) }
-                    if (verified == false) {
-                        throw IOException("Cached file SHA-256 does not match remote file")
-                    }
-                    transfer = TransferState(
-                        active = false,
-                        direction = "DOWNLOAD",
-                        name = entry.name,
-                        done = total,
-                        total = total,
-                        message = "Already complete",
-                        sha256Local = localHash,
-                        sha256Remote = remoteHash,
-                        verified = verified
-                    )
-                    publishToDownloads(outFile, entry.name)
-                    log("DATA", "Download cache already complete; published ${entry.name} to Downloads")
-                    return
-                }
-
-                val resume = if (existing > 0L && total > 0L) min(existing, total) else 0L
-                val startTime = System.currentTimeMillis()
-                transfer = TransferState(
-                    active = true,
-                    direction = "DOWNLOAD",
-                    name = entry.name,
-                    done = resume,
-                    total = total,
-                    message = if (resume > 0L) "Resuming" else "Starting"
-                )
-
-                RandomAccessFile(outFile, "rw").use { raf ->
-                    raf.setLength(resume)
-                    raf.seek(resume)
-                    val output = object : OutputStream() {
-                        override fun write(b: Int) = raf.write(b)
-                        override fun write(b: ByteArray, off: Int, len: Int) = raf.write(b, off, len)
-                    }
-                    client.download(entry.name, output, resume) { done, receivedTotal ->
-                        val elapsed = maxOf(1L, System.currentTimeMillis() - startTime)
-                        transfer = transfer.copy(
-                            done = done,
-                            total = receivedTotal,
-                            speedBps = done * 1000L / elapsed,
-                            message = "Transferring"
-                        )
-                    }
-                    output.flush()
-                }
-
-                val localHash = sha256(outFile)
-                val remoteHash = client.remoteSha256(entry.name)
-                val verified = remoteHash.takeIf { it.isNotBlank() }
-                    ?.let { localHash.equals(it, true) }
-                if (verified == false) throw IOException("SHA-256 verification failed")
-
-                publishToDownloads(outFile, entry.name)
-                transfer = transfer.copy(
-                    active = false,
-                    message = "Complete — saved to Downloads",
-                    sha256Local = localHash,
-                    sha256Remote = remoteHash,
-                    verified = verified
-                )
-                session = session.copy(bytes = session.bytes + outFile.length())
-                log("DATA", "Saved ${entry.name} to public Downloads; SHA-256 $localHash")
-            } catch (e: Exception) {
-                transfer = transfer.copy(active = false, message = "Download failed: ${e.message}")
-                log("ERROR", "Download failed: ${e.message}")
+        transfer = TransferState(active = true, direction = "DOWNLOAD", name = folder.path, message = "Reading folder")
+        try {
+            val children = parseListing(client.list(folder.path), folder.path)
+            for (child in children) {
+                if (child.directory) downloadFolderNow(child) else downloadFileNow(child)
             }
+            transfer = transfer.copy(active = false, message = "Folder complete — saved to Downloads")
+            log("DATA", "Folder download complete: ${folder.path}")
+        } catch (e: Exception) {
+            transfer = transfer.copy(active = false, message = "Folder download failed: ${e.message}")
+            log("ERROR", "Folder download failed: ${folder.path}: ${e.message}")
+        }
     }
 
-    private fun publishToDownloads(source: File, displayName: String) {
+    private suspend fun downloadFileNow(entry: RemoteEntry) {
+        val client = ftp ?: return
+        try {
+            val relative = entry.path.trimStart('/').replace("\\", "/")
+            val outFile = File(transferRoot, relative).canonicalFile
+            if (!outFile.path.startsWith(transferRoot.canonicalPath + File.separator)) throw IOException("Unsafe filename")
+            outFile.parentFile?.mkdirs()
+
+            val total = client.remoteSize(entry.path).takeIf { it >= 0 } ?: entry.size
+            val existing = if (outFile.exists()) outFile.length() else 0L
+            if (total >= 0L && existing == total) {
+                val localHash = sha256(outFile)
+                val remoteHash = client.remoteSha256(entry.path)
+                val verified = remoteHash.takeIf { it.isNotBlank() }?.let { localHash.equals(it, true) }
+                if (verified == false) throw IOException("Cached file SHA-256 does not match remote file")
+                transfer = TransferState(false, "DOWNLOAD", entry.path, total, total, 0L, "Already complete", localHash, remoteHash, verified)
+                publishToDownloads(outFile, relative)
+                log("DATA", "Cached file published: $relative")
+                return
+            }
+
+            val resume = if (existing > 0L && total > 0L) min(existing, total) else 0L
+            val startTime = System.currentTimeMillis()
+            transfer = TransferState(true, "DOWNLOAD", entry.path, resume, total, 0L, if (resume > 0) "Resuming" else "Starting")
+            RandomAccessFile(outFile, "rw").use { raf ->
+                raf.setLength(resume)
+                raf.seek(resume)
+                val output = object : OutputStream() {
+                    override fun write(b: Int) = raf.write(b)
+                    override fun write(b: ByteArray, off: Int, len: Int) = raf.write(b, off, len)
+                }
+                client.download(entry.path, output, resume) { done, receivedTotal ->
+                    val elapsed = maxOf(1L, System.currentTimeMillis() - startTime)
+                    val speed = done * 1000L / elapsed
+                    transfer = transfer.copy(done = done, total = receivedTotal, speedBps = speed, message = "Transferring")
+                    session = session.copy(bytes = done, throughputBps = speed)
+                }
+                output.flush()
+            }
+
+            val localHash = sha256(outFile)
+            val remoteHash = client.remoteSha256(entry.path)
+            val verified = remoteHash.takeIf { it.isNotBlank() }?.let { localHash.equals(it, true) }
+            if (verified == false) throw IOException("SHA-256 verification failed")
+            publishToDownloads(outFile, relative)
+            transfer = transfer.copy(active = false, message = "Complete — saved to Downloads", sha256Local = localHash, sha256Remote = remoteHash, verified = verified)
+            log("DATA", "Saved $relative to public Downloads; SHA-256 $localHash")
+        } catch (e: Exception) {
+            transfer = transfer.copy(active = false, message = "Download failed: ${e.message}")
+            log("ERROR", "Download failed: ${entry.path}: ${e.message}")
+        }
+    }
+
+    private fun publishToDownloads(source: File, relativePath: String) {
+        val clean = relativePath.trimStart('/').replace("\\", "/")
+        if (clean.isBlank() || clean.contains("../") || clean == "..") throw IOException("Unsafe Downloads path")
+        val parent = clean.substringBeforeLast('/', "")
+        val displayName = clean.substringAfterLast('/')
         if (android.os.Build.VERSION.SDK_INT >= 29) {
-            val resolver = contentResolver
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, displayName)
                 put(MediaStore.Downloads.MIME_TYPE, mimeTypeFor(displayName))
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.RELATIVE_PATH, if (parent.isBlank()) Environment.DIRECTORY_DOWNLOADS else Environment.DIRECTORY_DOWNLOADS + File.separator + parent)
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IOException("Cannot create public Downloads entry")
             try {
-                resolver.openOutputStream(uri)?.use { output ->
-                    source.inputStream().use { input -> input.copyTo(output, 64 * 1024) }
-                } ?: throw IOException("Cannot open public Downloads output")
-                values.clear()
-                values.put(MediaStore.Downloads.IS_PENDING, 0)
-                resolver.update(uri, values, null, null)
+                contentResolver.openOutputStream(uri)?.use { output -> source.inputStream().use { input -> input.copyTo(output, 64 * 1024) } }
+                    ?: throw IOException("Cannot open public Downloads output")
+                values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
             } catch (e: Exception) {
-                resolver.delete(uri, null, null)
+                contentResolver.delete(uri, null, null)
                 throw e
             }
         } else {
             @Suppress("DEPRECATION")
-            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).apply { mkdirs() }
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), parent).canonicalFile
+            dir.mkdirs()
             val destination = File(dir, displayName).canonicalFile
-            if (!destination.path.startsWith(dir.canonicalPath + File.separator)) {
-                throw IOException("Unsafe Downloads filename")
-            }
-            source.inputStream().use { input ->
-                destination.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
-            }
+            if (!destination.path.startsWith(dir.path + File.separator)) throw IOException("Unsafe Downloads filename")
+            source.inputStream().use { input -> destination.outputStream().use { output -> input.copyTo(output, 64 * 1024) } }
         }
-        transfer = transfer.copy(message = "Saved to Downloads")
-    }
-
-    private fun mimeTypeFor(name: String): String = when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
-        "pdf" -> "application/pdf"
-        "txt", "log" -> "text/plain"
-        "csv" -> "text/csv"
-        "json" -> "application/json"
-        "xml" -> "application/xml"
-        "jpg", "jpeg" -> "image/jpeg"
-        "png" -> "image/png"
-        "gif" -> "image/gif"
-        "mp3" -> "audio/mpeg"
-        "mp4" -> "video/mp4"
-        "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        "zip" -> "application/zip"
-        else -> "application/octet-stream"
     }
 
     private fun verifyRemote(name: String, uri: Uri, size: Long) {
@@ -589,14 +579,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshServerFiles() {
-        if (!::serverRoot.isInitialized) return
         serverFiles.clear()
-        serverFiles.addAll(
-            serverRoot.listFiles()
-                ?.sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase(Locale.US) }))
-                .orEmpty()
-        )
+        val files = serverRoot.listFiles()?.filter { it.exists() }?.sortedWith(
+            compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase(Locale.US) }
+        ).orEmpty()
+        serverFiles.addAll(files)
     }
+
 
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
@@ -817,8 +806,10 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun TransfersTab() {
-        val selectableFiles = remoteFiles.filterNot { it.directory }
-        val selectedCount = selectedRemoteNames.size
+        val remoteSelection = remoteFiles.filter { it.path in selectedRemoteNames }
+        val localSelection = serverFiles.filter { it.path in selectedRemoteNames }
+        val clientMode = connectedTarget.isNotBlank()
+        val phoneServerMode = !clientMode && serverRunning
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -827,37 +818,32 @@ class MainActivity : ComponentActivity() {
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp)) {
-                        Text("FTP CLIENT CONNECTION", style = MaterialTheme.typography.labelLarge)
+                        Text("TRANSFER MANAGER", style = MaterialTheme.typography.labelLarge)
                         Text(
-                            if (connectedTarget.isBlank()) "NOT CONNECTED" else "CONNECTED • $connectedTarget",
+                            when {
+                                clientMode -> "REMOTE FTP • $connectedTarget"
+                                phoneServerMode -> "PHONE FTP SERVER • ${localIpv4() ?: "LAN"}:$serverPort"
+                                else -> "NO ACTIVE FILE SOURCE"
+                            },
                             style = MaterialTheme.typography.titleMedium
                         )
-                        if (connectedTarget.isBlank()) {
-                            Text("Select an FTP device from Devices to enable client transfers.")
-                        } else {
-                            Text("Control channel: TCP ${connectedTarget.substringAfter(':')}")
-                            Text("Remote directory: ${remoteFiles.size} entries")
-                        }
+                        Text(
+                            when {
+                                clientMode -> "Remote files update automatically while the client is idle."
+                                phoneServerMode -> "Files uploaded from a laptop appear here automatically. No IP selection is required."
+                                else -> "Start the phone FTP server or select a device from Devices."
+                            }
+                        )
                         Spacer(Modifier.height(8.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Button(
-                                onClick = { uploadDocument.launch(arrayOf("*/*")) },
-                                enabled = connectedTarget.isNotBlank(),
-                                modifier = Modifier.weight(1f)
-                            ) { Text("Upload files") }
-                            OutlinedButton(
-                                onClick = { refreshRemote() },
-                                enabled = connectedTarget.isNotBlank() && !uploadQueueRunning && !downloadQueueRunning,
-                                modifier = Modifier.weight(1f)
-                            ) { Text("Refresh") }
-                            OutlinedButton(
-                                onClick = { disconnect() },
-                                enabled = connectedTarget.isNotBlank(),
-                                modifier = Modifier.weight(1f)
-                            ) { Text("Disconnect") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            if (clientMode) {
+                                Button(onClick = { uploadDocument.launch(arrayOf("*/*")) }, enabled = !uploadQueueRunning && !downloadQueueRunning, modifier = Modifier.weight(1f)) { Text("Upload") }
+                                OutlinedButton(onClick = { refreshRemote() }, modifier = Modifier.weight(1f)) { Text("Refresh") }
+                                OutlinedButton(onClick = { disconnect() }, modifier = Modifier.weight(1f)) { Text("Disconnect") }
+                            } else {
+                                OutlinedButton(onClick = { refreshServerFiles(); refreshRemote() }, modifier = Modifier.weight(1f)) { Text("Refresh") }
+                                OutlinedButton(onClick = { uploadDocument.launch(arrayOf("*/*")) }, enabled = phoneServerMode, modifier = Modifier.weight(1f)) { Text("Add files") }
+                            }
                         }
                     }
                 }
@@ -868,90 +854,68 @@ class MainActivity : ComponentActivity() {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(14.dp)) {
                             Text("${transfer.direction}: ${transfer.name}")
-                            if (transfer.total > 0) {
-                                LinearProgressIndicator(
-                                    progress = {
-                                        (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f)
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
+                            if (transfer.total > 0) LinearProgressIndicator(progress = { (transfer.done.toFloat() / transfer.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                             Text("${transfer.message} • ${transfer.done}/${transfer.total} bytes • ${transfer.speedBps} B/s")
                             if (transfer.sha256Local.isNotBlank()) Text("SHA-256 local: ${transfer.sha256Local}")
                             if (transfer.sha256Remote.isNotBlank()) Text("SHA-256 remote: ${transfer.sha256Remote}")
-                            transfer.verified?.let {
-                                Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH")
-                            }
+                            transfer.verified?.let { Text(if (it) "Integrity: VERIFIED" else "Integrity: MISMATCH") }
                         }
                     }
                 }
             }
 
-            item {
-                Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
-                Text("Select one or more files, then download them sequentially over the existing FTP connection.")
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            selectedRemoteNames.clear()
-                            selectedRemoteNames.addAll(selectableFiles.map { it.name })
-                        },
-                        enabled = selectableFiles.isNotEmpty(),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Select all") }
-                    OutlinedButton(
-                        onClick = { selectedRemoteNames.clear() },
-                        enabled = selectedCount > 0,
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Clear") }
-                    Button(
-                        onClick = {
-                            val chosen = remoteFiles.filter { !it.directory && it.name in selectedRemoteNames }
-                            queueDownloads(chosen)
-                        },
-                        enabled = connectedTarget.isNotBlank() && selectedCount > 0 && !downloadQueueRunning,
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Download ($selectedCount)") }
-                }
-            }
-
-            items(remoteFiles) { entry ->
-                val checked = entry.name in selectedRemoteNames
-                Card(
-                    Modifier.fillMaxWidth().clickable(
-                        enabled = connectedTarget.isNotBlank() && !entry.directory
-                    ) {
-                        if (checked) selectedRemoteNames.remove(entry.name)
-                        else selectedRemoteNames.add(entry.name)
+            if (clientMode) {
+                item {
+                    Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
+                    Text("Files and folders. Select folders to download recursively to Download/<folder>.")
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { selectedRemoteNames.clear(); selectedRemoteNames.addAll(remoteFiles.map { it.path }) }, enabled = remoteFiles.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Select all") }
+                        OutlinedButton(onClick = { selectedRemoteNames.clear() }, enabled = selectedRemoteNames.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Clear") }
                     }
-                ) {
-                    Row(
-                        Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (!entry.directory) {
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = { value ->
-                                    if (value) selectedRemoteNames.add(entry.name)
-                                    else selectedRemoteNames.remove(entry.name)
-                                }
-                            )
-                        } else {
-                            Spacer(Modifier.width(48.dp))
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = { queueDownloads(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning, modifier = Modifier.weight(1f)) { Text("Download (${remoteSelection.size})") }
+                        OutlinedButton(onClick = { shareRemoteEntries(remoteSelection) }, enabled = remoteSelection.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Share") }
+                        OutlinedButton(onClick = { queueDeleteRemote(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning && !uploadQueueRunning, modifier = Modifier.weight(1f)) { Text("Delete") }
+                    }
+                }
+                items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
+                    val checked = entry.path in selectedRemoteNames
+                    Card(Modifier.fillMaxWidth().clickable {
+                        if (checked) selectedRemoteNames.remove(entry.path) else selectedRemoteNames.add(entry.path)
+                    }) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = checked, onCheckedChange = { if (it) selectedRemoteNames.add(entry.path) else selectedRemoteNames.remove(entry.path) })
+                            Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) { Text(entry.name); Text(if (entry.directory) "Folder" else "${entry.size} bytes") }
+                            if (!entry.directory) IconButton(onClick = { queueDownloads(listOf(entry)) }, enabled = !downloadQueueRunning) { Icon(Icons.Default.Download, "Download") }
                         }
-                        Icon(
-                            if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                            null
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(entry.name)
-                            Text(if (entry.directory) "Directory" else "${entry.size} bytes")
+                    }
+                }
+            } else {
+                item {
+                    Text("PHONE SERVER FILES", style = MaterialTheme.typography.titleMedium)
+                    Text("Laptop uploads are shown here automatically while the embedded FTP server is running.")
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { selectedRemoteNames.clear(); selectedRemoteNames.addAll(serverFiles.map { it.absolutePath }) }, enabled = serverFiles.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Select all") }
+                        OutlinedButton(onClick = { selectedRemoteNames.clear() }, enabled = selectedRemoteNames.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Clear") }
+                        OutlinedButton(onClick = { shareFiles(serverSelectionFiles(serverFiles.filter { it.absolutePath in selectedRemoteNames })) }, enabled = selectedRemoteNames.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Share") }
+                    }
+                }
+                items(serverFiles, key = { "local-${it.absolutePath}" }) { file ->
+                    val key = file.absolutePath
+                    val checked = key in selectedRemoteNames
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = checked, onCheckedChange = { if (it) selectedRemoteNames.add(key) else selectedRemoteNames.remove(key) })
+                            Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) { Text(file.name); Text(if (file.isDirectory) "Folder" else "${file.length()} bytes") }
+                            IconButton(onClick = { shareFiles(serverSelectionFiles(listOf(file))) }) { Icon(Icons.Default.Share, "Share") }
+                            IconButton(onClick = { if (deleteLocalEntry(file)) refreshServerFiles() }) { Icon(Icons.Default.Delete, "Delete") }
                         }
                     }
                 }
@@ -1147,96 +1111,32 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ServerTab() {
-        LaunchedEffect(Unit) { refreshServerFiles() }
         Column(
-            Modifier.fillMaxSize()
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(0.dp)
+            Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("Embedded FTP Server", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(8.dp))
             ServerStatusAnimation(serverRunning)
-            Text(
-                if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED"
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = { toggleServer() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (serverRunning) "Stop Server" else "Start Server")
+            Text(if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { toggleServer() }, modifier = Modifier.weight(1f)) { Text(if (serverRunning) "Stop server" else "Start server") }
+                OutlinedButton(onClick = { showQr = true }, enabled = serverRunning, modifier = Modifier.weight(1f)) { Text("QR") }
+                OutlinedButton(onClick = { refreshServerFiles() }, modifier = Modifier.weight(1f)) { Text("Refresh") }
             }
-
-            Spacer(Modifier.height(12.dp))
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("Phone share folder: NetFTPShare", style = MaterialTheme.typography.titleMedium)
-                    Text("Add to Share is phone → laptop only. FTP client Upload is a separate operation in Transfers.")
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Button(
-                            onClick = { shareDocument.launch(arrayOf("*/*")) },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Add to Share") }
-                        OutlinedButton(
-                            onClick = { refreshServerFiles() },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Refresh") }
+            Text("SERVER FILES", style = MaterialTheme.typography.titleMedium)
+            Text("Changes made from Windows/File Explorer are detected automatically.")
+            if (serverFiles.isEmpty()) Text("No files in the FTP share yet.")
+            serverFiles.forEach { file ->
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) { Text(file.name); Text(if (file.isDirectory) "Folder" else "${file.length()} bytes") }
+                        IconButton(onClick = { shareFiles(serverSelectionFiles(listOf(file))) }) { Icon(Icons.Default.Share, "Share") }
+                        IconButton(onClick = { if (deleteLocalEntry(file)) refreshServerFiles() }) { Icon(Icons.Default.Delete, "Delete") }
                     }
                 }
             }
-
-            Spacer(Modifier.height(10.dp))
-            Text("SHARED / INCOMING FILES", style = MaterialTheme.typography.titleMedium)
-            Text("Laptop uploads and phone-shared files are stored in this FTP server folder.")
-            Spacer(Modifier.height(6.dp))
-
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                serverFiles.forEach { file ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Row(
-                            Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(file.name)
-                                Text(
-                                    "${file.length()} bytes • " +
-                                        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-                                            .format(Date(file.lastModified()))
-                                )
-                            }
-                            if (file.isFile) {
-                                IconButton(onClick = { saveServerFileToPhone(file) }) {
-                                    Icon(Icons.Default.Download, "Save to phone")
-                                }
-                            }
-                            IconButton(onClick = { deleteServerFile(file) }) {
-                                Icon(Icons.Default.Delete, "Delete")
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(10.dp))
-            Text("PHONE ↔ LAPTOP", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Phone → laptop: Add to Share → Start Server → laptop opens " +
-                    "ftp://${localIpv4() ?: "PHONE_IP"}:$serverPort.\n" +
-                    "Laptop → phone: upload to this server → the file appears above → " +
-                    "tap the Download icon to copy it into the phone transfer area."
-            )
-            Spacer(Modifier.height(6.dp))
-            OutlinedButton(
-                onClick = { showQr = true },
-                enabled = localIpv4() != null,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Show QR / FTP Endpoint") }
+            Button(onClick = { shareDocument.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) { Text("Add files to server") }
         }
     }
 

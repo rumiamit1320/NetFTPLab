@@ -2,6 +2,10 @@ package com.netftplab
 
 import android.content.Context
 import android.net.wifi.WifiInfo
+import android.net.TrafficStats
+import android.os.Process
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -20,7 +24,7 @@ import kotlinx.coroutines.delay
 import kotlin.math.max
 import kotlin.math.min
 
-private data class LiveNetSample(val timeMs: Long, val throughputBps: Long, val rssiDbm: Int, val snrDb: Int?)
+private data class LiveNetSample(val timeMs: Long, val throughputBps: Long, val rssiDbm: Int, val snrDb: Int?, val appBytesBps: Long = 0L)
 private data class WifiSnapshot(
     val rssiDbm: Int = -127, val frequencyMHz: Int = 0, val rxMbps: Int = 0, val txMbps: Int = 0,
     val linkStandard: String = "Unknown", val channelWidth: String = "Unknown", val snrDb: Int? = null,
@@ -38,10 +42,21 @@ fun AdvancedNetworkDrawer(
     val startMs = remember { System.currentTimeMillis() }
 
     LaunchedEffect(Unit) {
+        var lastRx = TrafficStats.getUidRxBytes(Process.myUid()).coerceAtLeast(0L)
+        var lastTx = TrafficStats.getUidTxBytes(Process.myUid()).coerceAtLeast(0L)
+        var lastTime = System.currentTimeMillis()
         while (true) {
             wifi = readWifiSnapshot(context)
-            samples.add(LiveNetSample(System.currentTimeMillis(), transfer.speedBps, wifi.rssiDbm, wifi.snrDb))
+            val now = System.currentTimeMillis()
+            val rx = TrafficStats.getUidRxBytes(Process.myUid()).coerceAtLeast(0L)
+            val tx = TrafficStats.getUidTxBytes(Process.myUid()).coerceAtLeast(0L)
+            val elapsed = max(1L, now - lastTime)
+            val delta = max(0L, (rx - lastRx) + (tx - lastTx))
+            val appBps = delta * 1000L / elapsed
+            val measured = if (appBps > 0L) appBps else transfer.speedBps
+            samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))
             while (samples.size > 90) samples.removeAt(0)
+            lastRx = rx; lastTx = tx; lastTime = now
             delay(1000)
         }
     }
@@ -50,7 +65,7 @@ fun AdvancedNetworkDrawer(
     val retransmissionCount = logs.count { it.layer.equals("RETX", true) || it.text.contains("retransmit", true) || it.text.contains("retransmission", true) }
     val ackCount = logs.count { it.layer.equals("ACK", true) || it.text.contains(" ACK", true) }
     val errorCount = logs.count { it.layer.equals("ERROR", true) }
-    val currentMbps = transfer.speedBps / 125_000.0
+    val currentMbps = (samples.lastOrNull()?.throughputBps ?: transfer.speedBps) / 125_000.0
     val peakMbps = samples.maxOfOrNull { it.throughputBps }?.div(125_000.0) ?: 0.0
     val avgMbps = if (samples.isEmpty()) 0.0 else samples.map { it.throughputBps }.average() / 125_000.0
     val uptimeSec = max(0L, (System.currentTimeMillis() - startMs) / 1000L)
@@ -68,6 +83,7 @@ fun AdvancedNetworkDrawer(
                 Text("${formatMbps(currentMbps)} Mbps", style = MaterialTheme.typography.headlineMedium)
                 Text("Current ${transfer.direction.ifBlank { "idle" }} • ${transfer.name.ifBlank { "no active transfer" }}")
                 Text("Average ${formatMbps(avgMbps)} Mbps  •  Peak ${formatMbps(peakMbps)} Mbps")
+                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("Session bytes ${formatBytes(session.bytes)}")
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
@@ -96,6 +112,7 @@ fun AdvancedNetworkDrawer(
                 Spacer(Modifier.height(8.dp)); RfGraph(samples)
             }
             MonitorCard("NETWORK STATE") {
+                StatRow("Network", networkStateText(context))
                 StatRow("FTP server", if (serverRunning) "ONLINE :2121" else "OFFLINE")
                 StatRow("FTP client", if (connectedTarget.isBlank()) "NOT CONNECTED" else connectedTarget)
                 StatRow("Monitor uptime", formatDuration(uptimeSec)); StatRow("Samples", samples.size.toString())
@@ -107,6 +124,22 @@ fun AdvancedNetworkDrawer(
             }
         }
     }
+}
+
+private fun networkStateText(context: Context): String {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val network = cm.activeNetwork ?: return "No active network"
+    val caps = cm.getNetworkCapabilities(network) ?: return "Network capabilities unavailable"
+    val transport = when {
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+        else -> "Other"
+    }
+    val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    val metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    return "$transport • ${if (validated) "validated" else "local/unvalidated"} • ${if (metered) "metered" else "unmetered"} • ↓${caps.linkDownstreamBandwidthKbps} kbps ↑${caps.linkUpstreamBandwidthKbps} kbps"
 }
 
 @Composable private fun MonitorCard(title: String, content: @Composable ColumnScope.() -> Unit) {
@@ -148,7 +181,18 @@ private fun readWifiSnapshot(context: Context): WifiSnapshot = try {
     val standard = if (android.os.Build.VERSION.SDK_INT >= 30) standardName(info.wifiStandard) else "Unknown"
     val width = readChannelWidth(info)
     val confidence = when { rssi <= -127 -> 0; freq <= 0 -> 25; else -> 60 }
-    WifiSnapshot(rssi, freq, if (android.os.Build.VERSION.SDK_INT >= 31) info.rxLinkSpeedMbps else 0, if (android.os.Build.VERSION.SDK_INT >= 31) info.txLinkSpeedMbps else 0, "$standard • $band", width, snr, if (rssi > -127) assumedNoise else null, classifyNoise(rssi, snr, band), confidence)
+    WifiSnapshot(
+        rssi,
+        freq,
+        if (android.os.Build.VERSION.SDK_INT >= 31) info.rxLinkSpeedMbps else 0,
+        if (android.os.Build.VERSION.SDK_INT >= 31) info.txLinkSpeedMbps else 0,
+        "$standard • $band",
+        width,
+        snr,
+        if (rssi > -127) assumedNoise else null,
+        classifyNoise(rssi, snr, band),
+        confidence
+    )
 } catch (_: Exception) { WifiSnapshot() }
 
 private fun readChannelWidth(info: WifiInfo): String = try {
