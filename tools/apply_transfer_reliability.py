@@ -273,7 +273,7 @@ def main() -> None:
 
 '''
     if 'private fun publishToDownloads(' in s:
-        s = replace_function(s, '    private fun publishToDownloads(', '    private fun verifyRemote(', publish_body)
+        s = s.replace('    private fun verifyRemote(', publish_body + '    private fun verifyRemote(', 1)
     else:
         s = s.replace('    private fun verifyRemote(', publish_body + '    private fun verifyRemote(', 1)
 
