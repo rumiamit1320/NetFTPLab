@@ -41,8 +41,6 @@ fun AdvancedNetworkDrawer(
     val samples = remember { mutableStateListOf<LiveNetSample>() }
     var liveDeviceRxBps by remember { mutableLongStateOf(0L) }
     var liveDeviceTxBps by remember { mutableLongStateOf(0L) }
-    val latestTransfer = rememberUpdatedState(transfer)
-    val latestSession = rememberUpdatedState(session)
     val startMs = remember { System.currentTimeMillis() }
 
     LaunchedEffect(Unit) {
@@ -63,13 +61,11 @@ fun AdvancedNetworkDrawer(
             val appBps = delta * 1000L / elapsed
             liveDeviceRxBps = max(0L, deviceRx - lastDeviceRx) * 1000L / elapsed
             liveDeviceTxBps = max(0L, deviceTx - lastDeviceTx) * 1000L / elapsed
-            val liveTransfer = latestTransfer.value
-            val liveSession = latestSession.value
-            val transferBps = max(liveTransfer.speedBps, liveSession.throughputBps)
+            val transferBps = max(transfer.speedBps, session.throughputBps)
             val measured = when {
-                liveTransfer.direction == "SERVER → DOWNLOADS" -> 0L
-                liveTransfer.active && transferBps > 0L -> transferBps
-                liveTransfer.message.contains("Complete", true) && transferBps > 0L -> transferBps
+                transfer.direction == "SERVER → DOWNLOADS" -> 0L
+                transfer.active && transferBps > 0L -> transferBps
+                transfer.message.contains("Complete", true) && transferBps > 0L -> transferBps
                 else -> appBps
             }
             samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))
@@ -102,10 +98,6 @@ fun AdvancedNetworkDrawer(
                 Text("Current ${transfer.direction.ifBlank { "idle" }} • ${transfer.name.ifBlank { "no active transfer" }}")
                 Text("Average ${formatMbps(avgMbps)} Mbps  •  Peak ${formatMbps(peakMbps)} Mbps")
                 Text("Live app throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("Session bytes ${formatBytes(session.bytes)}")
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
@@ -140,7 +132,7 @@ fun AdvancedNetworkDrawer(
                 Spacer(Modifier.height(8.dp)); RfGraph(samples)
             }
             MonitorCard("NETWORK STATE") {
-                StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps, transfer.direction, transfer.active, transfer.speedBps))
+                StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps))
                 StatRow("FTP server", if (serverRunning) "ONLINE :2121" else "OFFLINE")
                 StatRow("FTP client", if (connectedTarget.isBlank()) "NOT CONNECTED" else connectedTarget)
                 StatRow("Monitor uptime", formatDuration(uptimeSec)); StatRow("Samples", samples.size.toString())
@@ -154,14 +146,7 @@ fun AdvancedNetworkDrawer(
     }
 }
 
-private fun networkStateText(
-    context: Context,
-    liveRxBps: Long,
-    liveTxBps: Long,
-    transferDirection: String,
-    transferActive: Boolean,
-    transferBps: Long
-): String {
+private fun networkStateText(context: Context, liveRxBps: Long, liveTxBps: Long): String {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     val network = cm.activeNetwork ?: return "No active network"
     val caps = cm.getNetworkCapabilities(network) ?: return "Network capabilities unavailable"
@@ -174,11 +159,7 @@ private fun networkStateText(
     }
     val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     val metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
-    val ftpRx = if (transferActive && transferDirection == "DOWNLOAD") transferBps else 0L
-    val ftpTx = if (transferActive && transferDirection == "UPLOAD") transferBps else 0L
-    val liveRx = max(liveRxBps, ftpRx)
-    val liveTx = max(liveTxBps, ftpTx)
-    val live = "live ↓${formatRate(liveRx)} ↑${formatRate(liveTx)}"
+    val live = "live ↓${formatRate(liveRxBps)} ↑${formatRate(liveTxBps)}"
     val capacity = "link capacity ↓${caps.linkDownstreamBandwidthKbps} kbps ↑${caps.linkUpstreamBandwidthKbps} kbps"
     return "$transport • ${if (validated) "validated" else "local/unvalidated"} • ${if (metered) "metered" else "unmetered"} • $live • $capacity"
 }
