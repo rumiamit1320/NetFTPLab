@@ -602,6 +602,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -980,18 +981,18 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(onClick = { selectedRemoteNames.clear() }, enabled = selectedRemoteNames.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Clear") }
                     }
                     Spacer(Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(onClick = { queueDownloads(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning, modifier = Modifier.weight(1f)) { Text("Download (${remoteSelection.size})") }
-                        OutlinedButton(onClick = { shareRemoteEntries(remoteSelection) }, enabled = remoteSelection.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Share") }
-                        OutlinedButton(onClick = { queueDeleteRemote(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning && !uploadQueueRunning, modifier = Modifier.weight(1f)) { Text("Delete") }
-                    }
-                }
                     Button(
                         onClick = { queueDownloads(remoteFiles.filterNot { it.directory }) },
                         enabled = remoteFiles.any { !it.directory } && connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Download All (${remoteFiles.count { !it.directory }})") }
                     Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = { queueDownloads(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning, modifier = Modifier.weight(1f)) { Text("Download (${remoteSelection.size})") }
+                        OutlinedButton(onClick = { shareRemoteEntries(remoteSelection) }, enabled = remoteSelection.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Share") }
+                        OutlinedButton(onClick = { queueDeleteRemote(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning && !uploadQueueRunning, modifier = Modifier.weight(1f)) { Text("Delete") }
+                    }
+                }
                 items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
                     val checked = entry.path in selectedRemoteNames
                     Card(Modifier.fillMaxWidth().clickable {
