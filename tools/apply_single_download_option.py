@@ -1,23 +1,24 @@
 from pathlib import Path
 
-path = Path("app/src/main/java/com/netftplab/MainActivity.kt")
-text = path.read_text(encoding="utf-8")
+MAIN = Path("app/src/main/java/com/netftplab/MainActivity.kt")
+text = MAIN.read_text(encoding="utf-8")
 
 # Final transfer-only normalization. Earlier workflow steps can rebuild the
-# TransfersTab() with different row shapes. Do not depend on a particular
-# OutlinedButton/Card layout; anchor only on the remote-file LazyColumn.
-# Nothing outside the Transfer-tab download controls is changed here.
+# TransfersTab() with different row shapes. Normalize the remote item block here
+# so every remote entry has exactly ONE visible full-width download button.
+# Nothing in the monitor, server, discovery, FTP client, or queue workers is
+# changed by this script.
 
 list_markers = [
-    'items(remoteFiles, key = { "remote-${it.path}" }) { entry ->',
-    'items(remoteFiles) { entry ->',
+    '                items(remoteFiles, key = { "remote-${it.path}" }) { entry ->',
+    '                items(remoteFiles) { entry ->',
 ]
 marker = next((m for m in list_markers if m in text), None)
 if marker is None:
     raise SystemExit("Unable to locate remote file list")
 
-# Ensure exactly one Download All action immediately before the remote list.
-if 'Text("Download All (' not in text:
+# Ensure Download All exists immediately before the remote list.
+if 'queueDownloads(remoteFiles.filterNot { it.directory })' not in text:
     block = '''                item {
                     Button(
                         onClick = { queueDownloads(remoteFiles.filterNot { it.directory }) },
@@ -30,25 +31,70 @@ if 'Text("Download All (' not in text:
 '''
     text = text.replace(marker, block + marker, 1)
 
-# Ensure an individual action exists without assuming the previous row layout.
-# If an older script already supplied one, leave it untouched. Otherwise put a
-# full-width action at the start of each remote-item lambda, before its Card.
-individual = 'Text(if (entry.directory) "Download Folder" else "Download File")'
-if individual not in text:
-    action = '''                Button(
-                    onClick = { queueDownloads(listOf(entry)) },
-                    enabled = connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (entry.directory) "Download Folder" else "Download File")
+# Replace only the remote item lambda. This removes the duplicate IconButton and
+# the previously inserted button outside the Card, while preserving selection,
+# file metadata, and the existing queueDownloads() operation.
+item_start = text.find(marker)
+else_marker = '            } else {'
+item_end = text.find(else_marker, item_start)
+if item_start < 0 or item_end < 0:
+    raise SystemExit("Unable to locate remote item section")
+
+remote_items = '''                items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
+                    val checked = entry.path in selectedRemoteNames
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        if (it) {
+                                            if (entry.path !in selectedRemoteNames) selectedRemoteNames.add(entry.path)
+                                        } else {
+                                            selectedRemoteNames.remove(entry.path)
+                                        }
+                                    }
+                                )
+                                Icon(
+                                    if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    null
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(entry.name)
+                                    Text(if (entry.directory) "Folder" else "${entry.size} bytes")
+                                }
+                            }
+                            Button(
+                                onClick = { queueDownloads(listOf(entry)) },
+                                enabled = connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Download, null)
+                                Spacer(Modifier.width(6.dp))
+                                Text(if (entry.directory) "Download Folder" else "Download File")
+                            }
+                        }
+                    }
                 }
 '''
-    text = text.replace(marker, marker + "\n" + action, 1)
 
-if individual not in text:
-    raise SystemExit("Unable to create remote item download action")
-if 'Text("Download All (' not in text:
-    raise SystemExit("Unable to create Download All control")
+text = text[:item_start] + remote_items + text[item_end:]
 
-path.write_text(text, encoding="utf-8")
-print("Final transfer download controls normalized; monitor/server/discovery untouched")
+# Verify the final source contains exactly one individual button implementation
+# inside the remote list and one Download All action.
+if text.count('Text(if (entry.directory) "Download Folder" else "Download File")') != 1:
+    raise SystemExit("Remote item download control was not normalized to exactly one")
+if 'queueDownloads(listOf(entry))' not in text:
+    raise SystemExit("Individual file/folder download action is missing")
+if 'queueDownloads(remoteFiles.filterNot { it.directory })' not in text:
+    raise SystemExit("Download All action is missing")
+
+MAIN.write_text(text, encoding="utf-8")
+print("Remote transfer controls normalized: one Download File/Folder button per item plus Download All; monitor/server/discovery untouched")
