@@ -42,9 +42,12 @@ class FtpClient(
         return passivePort
     }
 
-    fun list(): String {
+    fun list(): String = list("")
+
+    fun list(path: String): String {
         val data = openDataSocket()
-        val response = command("LIST")
+        val commandText = if (path.isBlank()) "LIST" else "LIST $path"
+        val response = command(commandText)
         if (!response.startsWith("150") && !response.startsWith("125")) { data.close(); throw IOException(response) }
         val bytes = data.getInputStream().readBytes(); data.close(); val final = readResponse(); passivePort = -1
         logger("DATA", "LIST received ${bytes.size} bytes; $final")
@@ -83,6 +86,8 @@ class FtpClient(
     }
 
     fun delete(path: String) { command("DELE $path") }
+    fun deleteDirectory(path: String) { command("RMD $path") }
+    fun rename(from: String, to: String) { command("RNFR $from"); command("RNTO $to") }
     fun quit() { if (::control.isInitialized && !control.isClosed) { try { command("QUIT") } catch (_: Exception) {}; close() } }
     override fun close() { try { control.close() } catch (_: Exception) {} }
 
