@@ -39,29 +39,38 @@ fun AdvancedNetworkDrawer(
     val context = androidx.compose.ui.platform.LocalContext.current
     var wifi by remember { mutableStateOf(WifiSnapshot()) }
     val samples = remember { mutableStateListOf<LiveNetSample>() }
+    var liveDeviceRxBps by remember { mutableLongStateOf(0L) }
+    var liveDeviceTxBps by remember { mutableLongStateOf(0L) }
     val startMs = remember { System.currentTimeMillis() }
 
     LaunchedEffect(Unit) {
         var lastRx = TrafficStats.getUidRxBytes(Process.myUid()).coerceAtLeast(0L)
         var lastTx = TrafficStats.getUidTxBytes(Process.myUid()).coerceAtLeast(0L)
+        var lastDeviceRx = TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
+        var lastDeviceTx = TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
         var lastTime = System.currentTimeMillis()
         while (true) {
             wifi = readWifiSnapshot(context)
             val now = System.currentTimeMillis()
             val rx = TrafficStats.getUidRxBytes(Process.myUid()).coerceAtLeast(0L)
             val tx = TrafficStats.getUidTxBytes(Process.myUid()).coerceAtLeast(0L)
+            val deviceRx = TrafficStats.getTotalRxBytes().coerceAtLeast(0L)
+            val deviceTx = TrafficStats.getTotalTxBytes().coerceAtLeast(0L)
             val elapsed = max(1L, now - lastTime)
             val delta = max(0L, (rx - lastRx) + (tx - lastTx))
             val appBps = delta * 1000L / elapsed
+            liveDeviceRxBps = max(0L, deviceRx - lastDeviceRx) * 1000L / elapsed
+            liveDeviceTxBps = max(0L, deviceTx - lastDeviceTx) * 1000L / elapsed
+            val transferBps = max(transfer.speedBps, session.throughputBps)
             val measured = when {
-                transfer.active && transfer.speedBps > 0L -> transfer.speedBps
                 transfer.direction == "SERVER → DOWNLOADS" -> 0L
-                transfer.speedBps > 0L && transfer.message.contains("Complete", true) -> transfer.speedBps
+                transfer.active && transferBps > 0L -> transferBps
+                transfer.message.contains("Complete", true) && transferBps > 0L -> transferBps
                 else -> appBps
             }
             samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))
             while (samples.size > 90) samples.removeAt(0)
-            lastRx = rx; lastTx = tx; lastTime = now
+            lastRx = rx; lastTx = tx; lastDeviceRx = deviceRx; lastDeviceTx = deviceTx; lastTime = now
             delay(1000)
         }
     }
@@ -88,9 +97,7 @@ fun AdvancedNetworkDrawer(
                 Text("${formatMbps(currentMbps)} Mbps", style = MaterialTheme.typography.headlineMedium)
                 Text("Current ${transfer.direction.ifBlank { "idle" }} • ${transfer.name.ifBlank { "no active transfer" }}")
                 Text("Average ${formatMbps(avgMbps)} Mbps  •  Peak ${formatMbps(peakMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
+                Text("Live app throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("Session bytes ${formatBytes(session.bytes)}")
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
@@ -125,7 +132,7 @@ fun AdvancedNetworkDrawer(
                 Spacer(Modifier.height(8.dp)); RfGraph(samples)
             }
             MonitorCard("NETWORK STATE") {
-                StatRow("Network", networkStateText(context))
+                StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps))
                 StatRow("FTP server", if (serverRunning) "ONLINE :2121" else "OFFLINE")
                 StatRow("FTP client", if (connectedTarget.isBlank()) "NOT CONNECTED" else connectedTarget)
                 StatRow("Monitor uptime", formatDuration(uptimeSec)); StatRow("Samples", samples.size.toString())
@@ -139,7 +146,7 @@ fun AdvancedNetworkDrawer(
     }
 }
 
-private fun networkStateText(context: Context): String {
+private fun networkStateText(context: Context, liveRxBps: Long, liveTxBps: Long): String {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     val network = cm.activeNetwork ?: return "No active network"
     val caps = cm.getNetworkCapabilities(network) ?: return "Network capabilities unavailable"
@@ -152,7 +159,15 @@ private fun networkStateText(context: Context): String {
     }
     val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     val metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
-    return "$transport • ${if (validated) "validated" else "local/unvalidated"} • ${if (metered) "metered" else "unmetered"} • ↓${caps.linkDownstreamBandwidthKbps} kbps ↑${caps.linkUpstreamBandwidthKbps} kbps"
+    val live = "live ↓${formatRate(liveRxBps)} ↑${formatRate(liveTxBps)}"
+    val capacity = "link capacity ↓${caps.linkDownstreamBandwidthKbps} kbps ↑${caps.linkUpstreamBandwidthKbps} kbps"
+    return "$transport • ${if (validated) "validated" else "local/unvalidated"} • ${if (metered) "metered" else "unmetered"} • $live • $capacity"
+}
+
+private fun formatRate(bytesPerSecond: Long): String = when {
+    bytesPerSecond >= 1_000_000L -> "%.2f MB/s".format(bytesPerSecond / 1_000_000.0)
+    bytesPerSecond >= 1_000L -> "%.1f kB/s".format(bytesPerSecond / 1_000.0)
+    else -> "${bytesPerSecond} B/s"
 }
 
 @Composable private fun MonitorCard(title: String, content: @Composable ColumnScope.() -> Unit) {

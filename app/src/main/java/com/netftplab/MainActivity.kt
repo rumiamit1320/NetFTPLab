@@ -599,6 +599,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -1037,6 +1038,9 @@ class MainActivity : ComponentActivity() {
                             Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) { Text(file.name); Text(if (file.isDirectory) "Folder" else "${file.length()} bytes") }
+                            if (file.isFile) {
+                                IconButton(onClick = { saveServerFileToPhone(file) }) { Icon(Icons.Default.Download, "Save to Downloads") }
+                            }
                             IconButton(onClick = { shareFiles(serverSelectionFiles(listOf(file))) }) { Icon(Icons.Default.Share, "Share") }
                             IconButton(onClick = { if (deleteLocalEntry(file)) refreshServerFiles() }) { Icon(Icons.Default.Delete, "Delete") }
                         }
