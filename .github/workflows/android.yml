@@ -58,6 +58,9 @@ jobs:
       - name: Apply single-item download option
         run: python3 tools/apply_single_download_option.py
 
+      - name: Apply monitor and transfer telemetry correction
+        run: python3 tools/apply_monitor_transfer_telemetry_fix.py
+
       - name: Serialize FTP operations
         run: python3 tools/apply_ftp_transfer_serialization.py
 
@@ -66,12 +69,9 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/cleanup_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_monitor_server_visual_fix.py tools/apply_single_download_option.py tools/apply_ftp_transfer_serialization.py
-          git diff --cached --quiet || git commit -m 'Apply automated NetFTPLab patches'
+          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/cleanup_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_monitor_server_visual_fix.py tools/apply_single_download_option.py tools/apply_monitor_transfer_telemetry_fix.py tools/apply_ftp_transfer_serialization.py
+          git diff --cached --quiet || git commit -m 'Correct transfer actions and network telemetry'
 
-          # Another CI run can update main while this run is building.
-          # Rebase onto the latest main before pushing, then retry if the
-          # remote advances between fetch and push.
           for attempt in 1 2 3 4 5; do
             git fetch origin main
             if ! git rebase origin/main; then
