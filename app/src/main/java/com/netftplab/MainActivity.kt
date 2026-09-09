@@ -142,9 +142,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         transferRefreshJob?.cancel()
-        transferRefreshJob?.cancel()
-        transferRefreshJob?.cancel()
-        transferRefreshJob?.cancel()
         try { ftp?.close() } catch (_: Exception) { }
         server.stop()
         cancelServerNotification()
@@ -593,6 +590,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -850,7 +848,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         try {
-            val uris = existing.map { file -> FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", file) }
+            val uris = existing.map { file -> FileProvider.getUriForFile(this, "${packageName}.fileprovider", file) }
             val intent = if (uris.size == 1) {
                 Intent(Intent.ACTION_SEND).apply {
                     type = mimeTypeFor(existing.first().name)
