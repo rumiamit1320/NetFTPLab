@@ -143,6 +143,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         transferRefreshJob?.cancel()
         transferRefreshJob?.cancel()
+        transferRefreshJob?.cancel()
         try { ftp?.close() } catch (_: Exception) { }
         server.stop()
         cancelServerNotification()
@@ -586,6 +587,7 @@ class MainActivity : ComponentActivity() {
         ).orEmpty()
         serverFiles.addAll(files)
     }
+
 
 
 
