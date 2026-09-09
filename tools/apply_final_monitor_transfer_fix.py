@@ -12,7 +12,19 @@ all_button = '''                    Button(
                     ) { Text("Download All (${remoteFiles.count { !it.directory }})") }
 '''
 if 'Text("Download All (' not in s:
-    anchor = '''                    Button(
+    # Current TransfersTab uses a remoteSelection list rather than the older
+    # selectedCount anchor. Insert immediately after the Select all / Clear
+    # controls, before the selected-item actions.
+    selection_controls = '''                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { selectedRemoteNames.clear(); selectedRemoteNames.addAll(remoteFiles.map { it.path }) }, enabled = remoteFiles.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Select all") }
+                        OutlinedButton(onClick = { selectedRemoteNames.clear() }, enabled = selectedRemoteNames.isNotEmpty(), modifier = Modifier.weight(1f)) { Text("Clear") }
+                    }
+'''
+    if selection_controls in s:
+        s = s.replace(selection_controls, selection_controls + '                    Spacer(Modifier.height(6.dp))\n' + all_button, 1)
+    else:
+        # Fallback for a compatible older Transfer-tab layout.
+        anchor = '''                    Button(
                         onClick = {
                             val chosen = remoteFiles.filter { !it.directory && it.name in selectedRemoteNames }
                             queueDownloads(chosen)
@@ -21,14 +33,8 @@ if 'Text("Download All (' not in s:
                         modifier = Modifier.weight(1f)
                     ) { Text("Download ($selectedCount)") }
 '''
-    if anchor in s:
-        s = s.replace(anchor, anchor + all_button, 1)
-    else:
-        select_anchor = '''                    ) { Text("Select all") }
-                    OutlinedButton('''
-        if select_anchor in s:
-            s = s.replace(select_anchor, '''                    ) { Text("Select all") }
-''' + all_button + '''                    OutlinedButton(''', 1)
+        if anchor in s:
+            s = s.replace(anchor, anchor + all_button, 1)
         else:
             raise SystemExit("Unable to locate a safe Transfer-tab insertion point")
 MAIN.write_text(s, encoding="utf-8")
