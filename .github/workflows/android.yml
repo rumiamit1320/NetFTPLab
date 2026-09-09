@@ -39,6 +39,9 @@ jobs:
       - name: Apply transfer reliability fix
         run: python3 tools/apply_transfer_reliability.py
 
+      - name: Clean transfer reliability source
+        run: python3 tools/cleanup_transfer_reliability.py
+
       - name: Apply transfer operation helpers
         run: python3 tools/apply_transfer_helpers.py
 
@@ -53,8 +56,8 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_ftp_transfer_serialization.py
-          git diff --cached --quiet || git commit -m 'Fix transfer helpers and file sharing build'
+          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/cleanup_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_ftp_transfer_serialization.py
+          git diff --cached --quiet || git commit -m 'Clean transfer sharing and reliability fixes'
           git push origin HEAD:main
 
       - name: Set up JDK 17
