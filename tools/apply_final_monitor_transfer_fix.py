@@ -21,9 +21,16 @@ if 'Text("Download All (' not in s:
                         modifier = Modifier.weight(1f)
                     ) { Text("Download ($selectedCount)") }
 '''
-    if anchor not in s:
-        raise SystemExit("Multi-file Download action marker not found")
-    s = s.replace(anchor, anchor + all_button, 1)
+    if anchor in s:
+        s = s.replace(anchor, anchor + all_button, 1)
+    else:
+        select_anchor = '''                    ) { Text("Select all") }
+                    OutlinedButton('''
+        if select_anchor in s:
+            s = s.replace(select_anchor, '''                    ) { Text("Select all") }
+''' + all_button + '''                    OutlinedButton(''', 1)
+        else:
+            raise SystemExit("Unable to locate a safe Transfer-tab insertion point")
 MAIN.write_text(s, encoding="utf-8")
 
 # Make the long-running sampler observe current Compose state rather than the
@@ -67,7 +74,6 @@ if new_loop not in m:
         raise SystemExit("Monitor transfer sampling marker not found")
     m = m.replace(old_loop, new_loop, 1)
 
-# Show the measured FTP transfer rate in Network State while a transfer is active.
 old_call = 'StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps))'
 new_call = 'StatRow("Network", networkStateText(context, liveDeviceRxBps, liveDeviceTxBps, transfer.direction, transfer.active, transfer.speedBps))'
 if new_call not in m and old_call in m:
