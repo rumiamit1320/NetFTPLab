@@ -8,12 +8,7 @@ def main() -> None:
     marker = "    s = replace_function(s, '    private fun publishToDownloads(', '    private fun verifyRemote(', publish_body)"
     if marker not in s:
         raise SystemExit("Reliability publisher patch marker not found")
-    replacement = (
-        "    if 'private fun publishToDownloads(' in s:\n"
-        "        s = replace_function(s, '    private fun publishToDownloads(', '    private fun verifyRemote(', publish_body)\n"
-        "    else:\n"
-        "        s = s.replace('    private fun verifyRemote(', publish_body + '    private fun verifyRemote(', 1)"
-    )
+    replacement = "    s = s.replace('    private fun verifyRemote(', publish_body + '    private fun verifyRemote(', 1)"
     s = s.replace(marker, replacement, 1)
     P.write_text(s, encoding="utf-8")
     print("Prepared transfer reliability patch for builds where the publisher is absent")
