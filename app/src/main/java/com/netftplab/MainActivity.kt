@@ -608,6 +608,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -992,7 +993,7 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(onClick = { queueDeleteRemote(remoteSelection) }, enabled = remoteSelection.isNotEmpty() && !downloadQueueRunning && !uploadQueueRunning, modifier = Modifier.weight(1f)) { Text("Delete") }
                     }
                 }
-                                item {
+                item {
                     Button(
                         onClick = { queueDownloads(remoteFiles.filterNot { it.directory }) },
                         enabled = connectedTarget.isNotBlank() && remoteFiles.any { !it.directory } && !downloadQueueRunning && !uploadQueueRunning,
@@ -1001,25 +1002,46 @@ class MainActivity : ComponentActivity() {
                         Text("Download All (${remoteFiles.count { !it.directory }})")
                     }
                 }
-items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
-                Button(
-                    onClick = { queueDownloads(listOf(entry)) },
-                    enabled = connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (entry.directory) "Download Folder" else "Download File")
-                }
-
+                items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
                     val checked = entry.path in selectedRemoteNames
-                    Card(Modifier.fillMaxWidth().clickable {
-                        if (checked) selectedRemoteNames.remove(entry.path) else selectedRemoteNames.add(entry.path)
-                    }) {
-                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = checked, onCheckedChange = { if (it) selectedRemoteNames.add(entry.path) else selectedRemoteNames.remove(entry.path) })
-                            Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) { Text(entry.name); Text(if (entry.directory) "Folder" else "${entry.size} bytes") }
-                            if (!entry.directory) IconButton(onClick = { queueDownloads(listOf(entry)) }, enabled = !downloadQueueRunning) { Icon(Icons.Default.Download, "Download") }
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        if (it) {
+                                            if (entry.path !in selectedRemoteNames) selectedRemoteNames.add(entry.path)
+                                        } else {
+                                            selectedRemoteNames.remove(entry.path)
+                                        }
+                                    }
+                                )
+                                Icon(
+                                    if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    null
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(entry.name)
+                                    Text(if (entry.directory) "Folder" else "${entry.size} bytes")
+                                }
+                            }
+                            Button(
+                                onClick = { queueDownloads(listOf(entry)) },
+                                enabled = connectedTarget.isNotBlank() && !downloadQueueRunning && !uploadQueueRunning,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Download, null)
+                                Spacer(Modifier.width(6.dp))
+                                Text(if (entry.directory) "Download Folder" else "Download File")
+                            }
                         }
                     }
                 }
