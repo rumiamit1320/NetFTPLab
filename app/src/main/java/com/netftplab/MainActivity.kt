@@ -202,20 +202,6 @@ class MainActivity : ComponentActivity() {
 
     private fun localSubnet(): String? = localIpv4()?.substringBeforeLast('.')
 
-    private fun arpNeighborIps(): Set<String> {
-        return try {
-            File("/proc/net/arp").useLines { lines ->
-                lines.drop(1).mapNotNull { line ->
-                    val parts = line.trim().split(Regex("\\s+"))
-                    parts.firstOrNull()?.takeIf { ip ->
-                        ip.count { it == '.' } == 3 && ip != "0.0.0.0"
-                    }
-                }.toSet()
-            }
-        } catch (_: Exception) {
-            emptySet()
-        }
-    }
 
     private fun scanNetwork() {
         if (scanning) return
@@ -231,7 +217,6 @@ class MainActivity : ComponentActivity() {
         log("DISCOVERY", "Probing $subnet.0/24: FTP 21/2121, HTTP 80/443")
         lifecycleScope.launch(Dispatchers.IO) {
             val found = Collections.synchronizedList(mutableListOf<Device>())
-            val neighborIps = arpNeighborIps().filter { it.startsWith("$subnet.") }.toSet()
             coroutineScope {
                 (1..254).map { n ->
                     async {
@@ -258,13 +243,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }.awaitAll()
             }
-            val serviceIps = found.map { it.ip }.toSet()
-            neighborIps.filter { it != localIpv4() && it !in serviceIps }.forEach { ip ->
-                found += Device(ip, host = "Unknown", services = emptyList(), latencyMs = null)
-            }
             withContext(Dispatchers.Main) {
-                discovered.addAll(found.distinctBy { it.ip }.sortedBy { it.ip.substringAfterLast('.').toIntOrNull() ?: 999 })
-                log("DISCOVERY", "Scan complete: ${found.size} LAN devices/neighbors; ${serviceIps.size} service-bearing")
+                discovered.addAll(found.sortedBy { it.ip.substringAfterLast('.').toIntOrNull() ?: 999 })
+                log("DISCOVERY", "Scan complete: ${found.size} active service-bearing devices")
                 scanning = false
             }
         }
@@ -605,6 +586,7 @@ class MainActivity : ComponentActivity() {
         ).orEmpty()
         serverFiles.addAll(files)
     }
+
 
 
 
@@ -1017,32 +999,18 @@ class MainActivity : ComponentActivity() {
                 }
                 items(remoteFiles, key = { "remote-${it.path}" }) { entry ->
                     val checked = entry.path in selectedRemoteNames
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                Checkbox(checked = checked, onCheckedChange = {
-                                    if (it) {
-                                        if (entry.path !in selectedRemoteNames) selectedRemoteNames.add(entry.path)
-                                    } else {
-                                        selectedRemoteNames.remove(entry.path)
-                                    }
-                                })
-                                Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(entry.name)
-                                    Text(if (entry.directory) "Folder" else "${entry.size} bytes")
-                                }
-                            }
-                            Button(
+                    Card(Modifier.fillMaxWidth().clickable {
+                        if (checked) selectedRemoteNames.remove(entry.path) else selectedRemoteNames.add(entry.path)
+                    }) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = checked, onCheckedChange = { if (it) selectedRemoteNames.add(entry.path) else selectedRemoteNames.remove(entry.path) })
+                            Icon(if (entry.directory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) { Text(entry.name); Text(if (entry.directory) "Folder" else "${entry.size} bytes") }
+                            OutlinedButton(
                                 onClick = { queueDownloads(listOf(entry)) },
-                                enabled = !downloadQueueRunning && !uploadQueueRunning,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Download, null)
-                                Spacer(Modifier.width(6.dp))
-                                Text(if (entry.directory) "Download Folder" else "Download File")
-                            }
+                                enabled = !downloadQueueRunning && !uploadQueueRunning
+                            ) { Text(if (entry.directory) "Download Folder" else "Download File") }
                         }
                     }
                 }
