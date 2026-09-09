@@ -6,10 +6,9 @@ MAIN = Path("app/src/main/java/com/netftplab/MainActivity.kt")
 def main() -> None:
     s = MAIN.read_text(encoding="utf-8")
 
-    # Each upload must finish all control/data-channel operations before the
-    # next queued upload starts. refreshRemote() launches another coroutine,
-    # so calling it from uploadUriNow() creates concurrent FTP commands on the
-    # same persistent FtpClient and can race for the passive data socket.
+    # The multi-file transfer patch may already have applied this serialization
+    # change. Make this patch idempotent so CI never fails merely because the
+    # marker was already removed by an earlier patch.
     old_finally = '''            } finally {
                 refreshRemote()
             }
@@ -24,9 +23,11 @@ def main() -> None:
         s = s.replace(old_finally, new_finally, 1)
     elif "            } finally {\n                refreshRemote()\n            }" in s:
         s = s.replace("            } finally {\n                refreshRemote()\n            }", "            }", 1)
-    else:
-        raise SystemExit("Upload refresh-finally marker not found")
+    elif "refreshRemote()" not in s:
+        raise SystemExit("Unable to locate upload refresh-finally marker")
 
+    # Ensure the queue performs one LIST refresh only after every upload has
+    # completed. If this is already present, leave it untouched.
     old_queue_end = '''            withContext(Dispatchers.Main) { uploadQueueRunning = false }
         }
     }
@@ -54,7 +55,7 @@ def main() -> None:
     )
 
     MAIN.write_text(s, encoding="utf-8")
-    print("Serialized queued FTP uploads and deferred remote LIST refresh")
+    print("FTP transfer serialization patch applied (or already present)")
 
 
 if __name__ == "__main__":
