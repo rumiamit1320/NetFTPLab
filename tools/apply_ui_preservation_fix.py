@@ -12,8 +12,10 @@ if not MAIN.exists() or not MONITOR.exists():
 
 text = MAIN.read_text(encoding="utf-8")
 if 'Text(if (entry.directory) "Download Folder" else "Download File")' not in text:
-    raise SystemExit("Individual download action is missing")
-if 'Text("Download All (${remoteFiles.count { !it.directory }})")' not in text:
+    raise SystemExit("Individual file/folder download action is missing")
+if 'Text("Download All (${selectableFiles.size})")' not in text:
     raise SystemExit("Download All action is missing")
+if 'Text("Download ($selectedCount)")' not in text:
+    raise SystemExit("Selected-download action is missing")
 
 print("Preservation check passed; AdvancedNetworkMonitor.kt and device discovery were not modified")
