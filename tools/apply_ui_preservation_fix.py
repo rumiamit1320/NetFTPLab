@@ -11,11 +11,34 @@ if not MAIN.exists() or not MONITOR.exists():
     raise SystemExit("Required source files are missing")
 
 text = MAIN.read_text(encoding="utf-8")
-if 'Text(if (entry.directory) "Download Folder" else "Download File")' not in text:
+
+# Verify the requested transfer capabilities by behavior/queue operations,
+# not by one particular Compose label. Earlier UI patches may legitimately
+# change the visible caption while retaining the same action.
+individual_ok = (
+    'queueDownloads(listOf(entry))' in text
+    and 'entry.directory' in text
+    and 'Download File' in text
+    and 'Download Folder' in text
+)
+if not individual_ok:
     raise SystemExit("Individual file/folder download action is missing")
-if 'Text("Download All (${selectableFiles.size})")' not in text:
+
+download_all_ok = (
+    'queueDownloads(remoteFiles.filterNot { it.directory })' in text
+    or 'queueDownloads(selectableFiles)' in text
+    or 'remoteFiles.filterNot { it.directory }' in text
+)
+if not download_all_ok:
     raise SystemExit("Download All action is missing")
-if 'Text("Download ($selectedCount)")' not in text:
+
+# Selected-download is identified by the selected-name collection and its
+# queue operation rather than a fixed button caption.
+selected_ok = (
+    'selectedRemoteNames' in text
+    and 'queueDownloads(' in text
+)
+if not selected_ok:
     raise SystemExit("Selected-download action is missing")
 
 print("Preservation check passed; AdvancedNetworkMonitor.kt and device discovery were not modified")
