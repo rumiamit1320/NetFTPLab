@@ -592,6 +592,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -1207,32 +1208,100 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ServerTab() {
+        LaunchedEffect(Unit) { refreshServerFiles() }
         Column(
-            Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            Modifier.fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
+            Text("Embedded FTP Server", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(8.dp))
             ServerStatusAnimation(serverRunning)
-            Text(if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { toggleServer() }, modifier = Modifier.weight(1f)) { Text(if (serverRunning) "Stop server" else "Start server") }
-                OutlinedButton(onClick = { showQr = true }, enabled = serverRunning, modifier = Modifier.weight(1f)) { Text("QR") }
-                OutlinedButton(onClick = { refreshServerFiles() }, modifier = Modifier.weight(1f)) { Text("Refresh") }
+            Text(
+                if (serverRunning) "RUNNING • ${localIpv4() ?: "0.0.0.0"}:$serverPort" else "STOPPED"
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { toggleServer() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (serverRunning) "Stop Server" else "Start Server")
             }
-            Text("SERVER FILES", style = MaterialTheme.typography.titleMedium)
-            Text("Changes made from Windows/File Explorer are detected automatically.")
-            if (serverFiles.isEmpty()) Text("No files in the FTP share yet.")
-            serverFiles.forEach { file ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) { Text(file.name); Text(if (file.isDirectory) "Folder" else "${file.length()} bytes") }
-                        IconButton(onClick = { shareFiles(serverSelectionFiles(listOf(file))) }) { Icon(Icons.Default.Share, "Share") }
-                        IconButton(onClick = { if (deleteLocalEntry(file)) refreshServerFiles() }) { Icon(Icons.Default.Delete, "Delete") }
+
+            Spacer(Modifier.height(12.dp))
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Phone share folder: NetFTPShare", style = MaterialTheme.typography.titleMedium)
+                    Text("Add to Share is phone → laptop only. FTP client Upload is a separate operation in Transfers.")
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Button(
+                            onClick = { shareDocument.launch(arrayOf("*/*")) },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Add to Share") }
+                        OutlinedButton(
+                            onClick = { refreshServerFiles() },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Refresh") }
                     }
                 }
             }
-            Button(onClick = { shareDocument.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) { Text("Add files to server") }
+
+            Spacer(Modifier.height(10.dp))
+            Text("SHARED / INCOMING FILES", style = MaterialTheme.typography.titleMedium)
+            Text("Laptop uploads and phone-shared files are stored in this FTP server folder.")
+            Spacer(Modifier.height(6.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                serverFiles.forEach { file ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(file.name)
+                                Text(
+                                    "${file.length()} bytes • " +
+                                        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+                                            .format(Date(file.lastModified()))
+                                )
+                            }
+                            if (file.isFile) {
+                                IconButton(onClick = { saveServerFileToPhone(file) }) {
+                                    Icon(Icons.Default.Download, "Save to phone")
+                                }
+                                IconButton(onClick = { shareFiles(listOf(file)) }) {
+                                    Icon(Icons.Default.Share, "Share")
+                                }
+                            }
+                            IconButton(onClick = {
+                                if (deleteLocalEntry(file)) refreshServerFiles()
+                            }) {
+                                Icon(Icons.Default.Delete, "Delete")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text("PHONE ↔ LAPTOP", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Phone → laptop: Add to Share → Start Server → laptop opens " +
+                    "ftp://${localIpv4() ?: "PHONE_IP"}:$serverPort.\n" +
+                    "Laptop → phone: upload to this server → the file appears above → " +
+                    "tap the Download icon to copy it into the phone transfer area."
+            )
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = { showQr = true },
+                enabled = localIpv4() != null,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Show QR / FTP Endpoint") }
         }
     }
 

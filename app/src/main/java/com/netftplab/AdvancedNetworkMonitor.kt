@@ -53,7 +53,7 @@ fun AdvancedNetworkDrawer(
             val elapsed = max(1L, now - lastTime)
             val delta = max(0L, (rx - lastRx) + (tx - lastTx))
             val appBps = delta * 1000L / elapsed
-            val measured = if (appBps > 0L) appBps else transfer.speedBps
+            val measured = if (transfer.active && transfer.speedBps > 0L) transfer.speedBps else appBps
             samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))
             while (samples.size > 90) samples.removeAt(0)
             lastRx = rx; lastTx = tx; lastTime = now
@@ -86,16 +86,13 @@ fun AdvancedNetworkDrawer(
                 Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("Session bytes ${formatBytes(session.bytes)}")
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
             MonitorCard("PACKET / TRANSFER TELEMETRY") {
                 StatRow("ACK events", ackCount.toString()); StatRow("Retransmission indicators", retransmissionCount.toString())
                 StatRow("Collision events", collisionCount.toString()); StatRow("Errors", errorCount.toString())
-                StatRow("RTT", if (session.rttMs > 0) "${session.rttMs} ms" else "Not measured")
+                StatRow("RTT (discovery)", if (session.rttMs > 0) "${session.rttMs} ms" else "Not measured")
                 StatRow("Goodput", "${formatMbps(currentMbps)} Mbps")
             }
             MonitorCard("TCP CONGESTION MODEL") {
@@ -113,7 +110,7 @@ fun AdvancedNetworkDrawer(
                 StatRow("Frequency", if (wifi.frequencyMHz > 0) "${wifi.frequencyMHz} MHz" else "Unavailable")
                 StatRow("Channel", frequencyToChannel(wifi.frequencyMHz).ifBlank { "Unavailable" }); StatRow("Channel width", wifi.channelWidth)
                 StatRow("PHY", wifi.linkStandard); StatRow("RX link rate", "${wifi.rxMbps} Mbps"); StatRow("TX link rate", "${wifi.txMbps} Mbps")
-                Text("SNR/noise are estimates because standard Android Wi-Fi APIs do not expose a calibrated RF noise-floor measurement.", style = MaterialTheme.typography.bodySmall)
+                Text("SNR/noise are estimates; ACK/retransmission/collision counters are application/protocol indicators, not raw Wi-Fi packet captures.", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(8.dp)); RfGraph(samples)
             }
             MonitorCard("NETWORK STATE") {
@@ -154,7 +151,12 @@ private fun networkStateText(context: Context): String {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(label); Text(value, fontWeight = FontWeight.SemiBold) }
 }
 @Composable private fun ThroughputGraph(samples: List<LiveNetSample>) {
-    GraphFrame("Mbps") { val maxValue = max(1.0, samples.maxOfOrNull { it.throughputBps / 125_000.0 } ?: 1.0); drawSeries(samples.map { it.throughputBps / 125_000.0 }, maxValue) }
+    GraphFrame("Mbps") {
+        val values = samples.map { it.throughputBps / 125_000.0 }
+        val peak = values.maxOrNull() ?: 0.0
+        val maxValue = max(0.05, peak * 1.25)
+        drawSeries(values, 0.0, maxValue)
+    }
 }
 @Composable private fun RfGraph(samples: List<LiveNetSample>) {
     GraphFrame("dBm / dB") {
@@ -172,7 +174,12 @@ private fun networkStateText(context: Context): String {
 }
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSeries(values: List<Double>, minValue: Double = 0.0, maxValue: Double = 1.0, offset: Int = 0) {
     if (values.size < 2 || maxValue <= minValue) return
-    val points = values.mapIndexed { i, value -> Offset((size.width * (i + offset) / 89f), (size.height - ((value - minValue) / (maxValue - minValue)).coerceIn(0.0, 1.0) * size.height).toFloat()) }
+    val denominator = (values.size - 1).coerceAtLeast(1).toFloat()
+    val points = values.mapIndexed { i, value ->
+        val x = size.width * (i + offset).toFloat() / (denominator + offset.coerceAtLeast(0))
+        val normalized = ((value - minValue) / (maxValue - minValue)).coerceIn(0.0, 1.0)
+        Offset(x, (size.height - normalized * size.height).toFloat())
+    }
     points.zipWithNext().forEach { (a, b) -> drawLine(Color(0xFF60A5FA), a, b, 3f) }
 }
 
