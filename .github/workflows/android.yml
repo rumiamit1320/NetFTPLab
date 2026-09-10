@@ -73,13 +73,16 @@ jobs:
       - name: Apply server storage management
         run: python3 tools/apply_server_storage_v2.py
 
+      - name: Normalize server storage helpers
+        run: python3 tools/fix_server_storage_duplicates.py
+
       - name: Commit patched source
         if: github.event_name == 'push'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/cleanup_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_monitor_server_visual_fix.py tools/apply_single_download_option.py tools/apply_monitor_transfer_telemetry_fix.py tools/apply_ftp_transfer_serialization.py tools/apply_final_monitor_transfer_fix.py tools/apply_ui_preservation_fix.py tools/apply_throughput_metric_fix.py tools/apply_server_storage_management.py tools/apply_server_storage_v2.py
-          git diff --cached --quiet || git commit -m 'Fix real-time throughput metric'
+          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/cleanup_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_monitor_server_visual_fix.py tools/apply_single_download_option.py tools/apply_monitor_transfer_telemetry_fix.py tools/apply_ftp_transfer_serialization.py tools/apply_final_monitor_transfer_fix.py tools/apply_ui_preservation_fix.py tools/apply_throughput_metric_fix.py tools/apply_server_storage_management.py tools/apply_server_storage_v2.py tools/fix_server_storage_duplicates.py
+          git diff --cached --quiet || git commit -m 'Fix duplicate server storage helpers'
 
           for attempt in 1 2 3 4 5; do
             git fetch origin main
