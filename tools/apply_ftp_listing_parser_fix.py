@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 MAIN = Path("app/src/main/java/com/netftplab/MainActivity.kt")
 
@@ -20,8 +19,7 @@ def replace_function(source: str, name: str, body: str) -> str:
         elif source[i] == "}":
             depth -= 1
             if depth == 0:
-                end = i + 1
-                return source[:start] + body + source[end:]
+                return source[:start] + body + source[i + 1:]
         i += 1
     raise SystemExit(f"Unterminated {name} function")
 
@@ -35,9 +33,7 @@ def main():
             val value = line.trim()
             if (value.isBlank()) return@mapNotNull null
 
-            // Windows/DOS FTP LIST format, e.g.:
-            // 11-17-2025 12:51PM 123456 report.ods
-            // 09-10-2026 12:12AM <DIR> 5g sim
+            // Windows/DOS FTP LIST format.
             val dos = windowsDos.matchEntire(value)
             if (dos != null) {
                 val kindOrSize = dos.groupValues[3]
@@ -64,6 +60,8 @@ def main():
         }.toList()
     }
 '''
+    # Convert the raw Python string's escaped quotes into normal Kotlin quotes.
+    body = body.replace('\\"', '"')
     MAIN.write_text(replace_function(s, "parseListing", body), encoding="utf-8")
     print("FTP listing parser now supports Windows/DOS and Unix LIST formats")
 
