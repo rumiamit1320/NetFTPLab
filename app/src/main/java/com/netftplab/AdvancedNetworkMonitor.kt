@@ -67,9 +67,7 @@ fun AdvancedNetworkDrawer(
             val liveSession = latestSession.value
             val transferBps = max(liveTransfer.speedBps, liveSession.throughputBps)
             val measured = when {
-                liveTransfer.direction == "SERVER → DOWNLOADS" -> 0L
                 liveTransfer.active && transferBps > 0L -> transferBps
-                liveTransfer.message.contains("Complete", true) && transferBps > 0L -> transferBps
                 else -> appBps
             }
             samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))
@@ -108,7 +106,6 @@ fun AdvancedNetworkDrawer(
                 Text("Current ${if (transfer.active) transfer.direction else "IDLE"} • ${if (transfer.active) transfer.name else "no active transfer"}")
                 Text("Average ${formatMbps(avgMbps)} Mbps  •  Peak ${formatMbps(peakMbps)} Mbps")
                 Text("Live app throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
                 Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
                 Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
                 Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
