@@ -1,14 +1,15 @@
 from pathlib import Path
+import re
 
 MAIN = Path("app/src/main/java/com/netftplab/MainActivity.kt")
 
 
-def require_once(text: str, marker: str, block: str) -> str:
-    if block.strip() in text:
+def ensure_after(text: str, marker: str, line: str) -> str:
+    if line in text:
         return text
     if marker not in text:
         raise SystemExit(f"marker not found: {marker!r}")
-    return text.replace(marker, block + "\n" + marker, 1)
+    return text.replace(marker, marker + "\n" + line, 1)
 
 
 def replace_once(text: str, old: str, new: str) -> str:
@@ -20,13 +21,18 @@ def replace_once(text: str, old: str, new: str) -> str:
 def main() -> None:
     s = MAIN.read_text(encoding="utf-8")
 
-    s = require_once(
-        s,
-        '    private var showQr by mutableStateOf(false)',
-        '    private var showClearServerDialog by mutableStateOf(false)\n    private var showDeleteTypeDialog by mutableStateOf(false)\n    private var showServerBrowser by mutableStateOf(false)\n    private var serverBrowserPath by mutableStateOf("")'
-    )
+    # Normalize state declarations. Earlier patch runs may have left partial or
+    # duplicate declarations; make this step safely idempotent.
+    s = re.sub(r'(?m)^    private var showClearServerDialog by mutableStateOf\(false\)\n(?:    private var showClearServerDialog by mutableStateOf\(false\)\n)+',
+               '    private var showClearServerDialog by mutableStateOf(false)\n', s)
+    s = ensure_after(s, '    private var showClearServerDialog by mutableStateOf(false)',
+                     '    private var showDeleteTypeDialog by mutableStateOf(false)')
+    s = ensure_after(s, '    private var showDeleteTypeDialog by mutableStateOf(false)',
+                     '    private var showServerBrowser by mutableStateOf(false)')
+    s = ensure_after(s, '    private var showServerBrowser by mutableStateOf(false)',
+                     '    private var serverBrowserPath by mutableStateOf("")')
 
-    # Replace the old generic Android picker with an in-app browser rooted at the
+    # Replace the generic Android picker with an in-app browser rooted at the
     # exact directory used by the embedded FTP server.
     old_open = '''    private fun openServerStorage() {
         try {
@@ -41,9 +47,7 @@ def main() -> None:
     }
 '''
     new_open = '''    private fun openServerStorage() {
-        // NetFTPShare is the embedded server's actual root. Android's generic
-        // ACTION_OPEN_DOCUMENT_TREE picker cannot reliably target this app-private
-        // directory, so show the real directory in the app's browser.
+        // This is the actual embedded FTP root, not a generic Android picker.
         serverBrowserPath = ""
         showServerBrowser = true
         log("SERVER", "Opened actual NetFTPShare folder: ${serverRoot.absolutePath}")
@@ -52,7 +56,6 @@ def main() -> None:
     if old_open in s:
         s = replace_once(s, old_open, new_open)
 
-    # Add only helpers that do not already exist in the original storage patch.
     helper = '''    private fun serverRelativePath(file: File): String {
         val root = serverRoot.canonicalFile
         val target = file.canonicalFile
@@ -99,35 +102,18 @@ def main() -> None:
         }
     }
 '''
-    s = require_once(s, '    private fun deleteServerFile(file: File) {', helper)
+    if 'private fun serverFilesAt(' not in s:
+        if '    private fun deleteServerFile(file: File) {' not in s:
+            raise SystemExit("deleteServerFile marker not found")
+        s = s.replace('    private fun deleteServerFile(file: File) {', helper + '\n    private fun deleteServerFile(file: File) {', 1)
 
-    # Add a dedicated Delete by Type button below the existing Open Storage/Clear All row.
+    # Add Delete by Type without depending on the exact surrounding Row formatting.
     if 'Text("Delete by Type")' not in s:
-        anchor = '''                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        OutlinedButton(
-                            onClick = { openServerStorage() },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Open Storage") }
-                        Button(
-                            onClick = { showClearServerDialog = true },
-                            enabled = serverFiles.isNotEmpty(),
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Clear All") }
-                    }
-'''
-        extra = anchor + '''                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { showDeleteTypeDialog = true },
-                        enabled = serverFiles.any { root -> root.walkTopDown().any { it.isFile && it.extension.isNotBlank() } },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Delete by Type") }
-'''
+        button = '''\n                    OutlinedButton(\n                        onClick = { showDeleteTypeDialog = true },\n                        enabled = serverFiles.any { root -> root.walkTopDown().any { it.isFile && it.extension.isNotBlank() } },\n                        modifier = Modifier.fillMaxWidth()\n                    ) { Text("Delete by Type") }\n'''
+        anchor = '                        ) { Text("Open Storage") }'
         if anchor not in s:
-            raise SystemExit("SERVER STORAGE button row not found")
-        s = s.replace(anchor, extra, 1)
+            raise SystemExit("Open Storage button not found")
+        s = s.replace(anchor, anchor + button, 1)
 
     browser = '''            if (showServerBrowser) {
                 Card(Modifier.fillMaxWidth()) {
