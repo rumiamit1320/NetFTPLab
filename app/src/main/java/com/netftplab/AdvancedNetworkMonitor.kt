@@ -108,8 +108,7 @@ fun AdvancedNetworkDrawer(
                 Text("Live app throughput: ${formatMbps(currentMbps)} Mbps")
                 Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
                 
-                Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
+                
                 Text("Session bytes ${formatBytes(session.bytes)}")
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
