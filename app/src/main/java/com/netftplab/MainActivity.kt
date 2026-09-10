@@ -728,6 +728,7 @@ class MainActivity : ComponentActivity() {
                 }
                 withContext(Dispatchers.Main) {
                     refreshServerFiles()
+                    serverBrowserPath = ""
                     transfer = TransferState(message = if (failed == 0) "Server storage cleared" else "Cleared $deleted item(s); $failed could not be removed")
                     log("SERVER", "Server storage cleared: $deleted item(s), $failed failed")
                 }
@@ -738,17 +739,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-    }
-
-    private fun serverStorageBytes(): Long = serverFiles.sumOf { file ->
-        if (file.isDirectory) file.walkTopDown().filter { it.isFile }.sumOf { it.length() } else file.length()
-    }
-
-    private fun formatStorageBytes(bytes: Long): String {
-        if (bytes < 1024L) return "$bytes B"
-        if (bytes < 1024L * 1024L) return "%.1f KB".format(Locale.US, bytes / 1024.0)
-        if (bytes < 1024L * 1024L * 1024L) return "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024.0))
-        return "%.2f GB".format(Locale.US, bytes / (1024.0 * 1024.0 * 1024.0))
     }
 
     private fun serverRelativePath(file: File): String {
@@ -763,15 +753,7 @@ class MainActivity : ComponentActivity() {
         val root = serverRoot.canonicalFile
         val current = if (relativePath.isBlank()) root else File(root, relativePath).canonicalFile
         if (current != root && !current.path.startsWith(root.path + File.separator)) throw IOException("Unsafe server path")
-        return current.listFiles()?.sortedWith(compareBy<File> { !it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }).orEmpty()
-    }
-
-    private fun openServerStorage() {
-        // The FTP share lives in the app's external-files directory. ACTION_OPEN_DOCUMENT_TREE
-        // cannot reliably jump to this app-private directory, so show the actual serverRoot
-        // contents in our own browser instead of an unrelated Android folder picker.
-        serverBrowserPath = ""
-        log("SERVER", "Opened NetFTPShare folder browser: ${serverRoot.absolutePath}")
+        return current.listFiles()?.sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase(Locale.US) }).orEmpty()
     }
 
     private fun deleteServerFilesByExtensions(extensions: Set<String>) {
@@ -785,14 +767,15 @@ class MainActivity : ComponentActivity() {
                     val ext = file.extension.lowercase(Locale.US)
                     if (ext.isNotBlank() && ext in extensions) {
                         try {
-                            if (file.canonicalFile.path.startsWith(root.path + File.separator) && file.delete()) deleted++ else failed++
+                            val safe = file.canonicalFile.path.startsWith(root.path + File.separator)
+                            if (safe && file.delete()) deleted++ else failed++
                         } catch (_: Exception) { failed++ }
                     }
                 }
                 withContext(Dispatchers.Main) {
                     refreshServerFiles()
                     showDeleteTypeDialog = false
-                    transfer = TransferState(message = if (failed == 0) "Deleted $deleted file(s)" else "Deleted $deleted file(s); $failed failed")
+                    transfer = TransferState(message = "Deleted $deleted file(s)" + if (failed > 0) "; $failed failed" else "")
                     log("SERVER", "Delete by file type: $deleted deleted, $failed failed")
                 }
             } catch (e: Exception) {
@@ -800,36 +783,6 @@ class MainActivity : ComponentActivity() {
                     showDeleteTypeDialog = false
                     transfer = TransferState(message = "Delete by type failed: ${e.message}")
                     log("ERROR", "Delete by type failed: ${e.message}")
-                }
-            }
-        }
-    }
-
-    private fun clearServerStorage() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val root = serverRoot.canonicalFile
-                val children = root.listFiles()?.toList().orEmpty()
-                var deleted = 0
-                var failed = 0
-                for (child in children) {
-                    val target = child.canonicalFile
-                    if (!target.path.startsWith(root.path + File.separator)) {
-                        failed++
-                        continue
-                    }
-                    if (target.deleteRecursively()) deleted++ else failed++
-                }
-                withContext(Dispatchers.Main) {
-                    refreshServerFiles()
-                    serverBrowserPath = ""
-                    transfer = TransferState(message = if (failed == 0) "Server storage cleared" else "Cleared $deleted item(s); $failed could not be removed")
-                    log("SERVER", "Server storage cleared: $deleted item(s), $failed failed")
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    transfer = TransferState(message = "Clear server storage failed: ${e.message}")
-                    log("ERROR", "Clear server storage failed: ${e.message}")
                 }
             }
         }
