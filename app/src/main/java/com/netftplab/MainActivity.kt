@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
     private var serverPort by mutableIntStateOf(2121)
     private var transfer by mutableStateOf(TransferState())
     private var session by mutableStateOf(SessionStats())
+    private var showClearServerDialog by mutableStateOf(false)
     private var showQr by mutableStateOf(false)
     private val uploadQueue = ArrayDeque<Uri>()
     private val downloadQueue = ArrayDeque<RemoteEntry>()
@@ -683,6 +684,58 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 log("ERROR", "Saving to Downloads failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun serverStorageBytes(): Long = serverFiles.sumOf { file ->
+        if (file.isDirectory) file.walkTopDown().filter { it.isFile }.sumOf { it.length() } else file.length()
+    }
+
+    private fun formatStorageBytes(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        if (bytes < 1024L * 1024L) return "%.1f KB".format(Locale.US, bytes / 1024.0)
+        if (bytes < 1024L * 1024L * 1024L) return "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024.0))
+        return "%.2f GB".format(Locale.US, bytes / (1024.0 * 1024.0 * 1024.0))
+    }
+
+    private fun openServerStorage() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+            startActivity(intent)
+            log("SERVER", "Opened Android storage picker for server storage")
+        } catch (e: Exception) {
+            log("ERROR", "Could not open storage browser: ${e.message}")
+        }
+    }
+
+    private fun clearServerStorage() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val root = serverRoot.canonicalFile
+                val children = root.listFiles()?.toList().orEmpty()
+                var deleted = 0
+                var failed = 0
+                for (child in children) {
+                    val target = child.canonicalFile
+                    if (!target.path.startsWith(root.path + File.separator)) {
+                        failed++
+                        continue
+                    }
+                    if (target.deleteRecursively()) deleted++ else failed++
+                }
+                withContext(Dispatchers.Main) {
+                    refreshServerFiles()
+                    transfer = TransferState(message = if (failed == 0) "Server storage cleared" else "Cleared $deleted item(s); $failed could not be removed")
+                    log("SERVER", "Server storage cleared: $deleted item(s), $failed failed")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    transfer = TransferState(message = "Clear server storage failed: ${e.message}")
+                    log("ERROR", "Clear server storage failed: ${e.message}")
+                }
             }
         }
     }
@@ -1353,6 +1406,49 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("SERVER STORAGE", style = MaterialTheme.typography.titleMedium)
+                    Text("${serverFiles.size} item(s) • ${formatStorageBytes(serverStorageBytes())} stored in NetFTPShare")
+                    Text("These are the copies kept by the phone FTP server. Clearing them does not delete the original files elsewhere on the phone.")
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedButton(
+                            onClick = { openServerStorage() },
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Open Storage") }
+                        Button(
+                            onClick = { showClearServerDialog = true },
+                            enabled = serverFiles.isNotEmpty(),
+                            modifier = Modifier.weight(1f)
+                        ) { Text("Clear All") }
+                    }
+                }
+            }
+
+            if (showClearServerDialog) {
+                AlertDialog(
+                    onDismissRequest = { showClearServerDialog = false },
+                    title = { Text("Clear server storage?") },
+                    text = {
+                        Text("This will permanently delete ${serverFiles.size} item(s) (${formatStorageBytes(serverStorageBytes())}) stored by the phone FTP server. Original files outside NetFTPShare will not be deleted.")
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showClearServerDialog = false
+                            clearServerStorage()
+                        }) { Text("Clear") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showClearServerDialog = false }) { Text("Cancel") }
+                    }
+                )
             }
 
             Spacer(Modifier.height(10.dp))
