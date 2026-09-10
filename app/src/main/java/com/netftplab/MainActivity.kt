@@ -338,9 +338,7 @@ class MainActivity : ComponentActivity() {
             val value = line.trim()
             if (value.isBlank()) return@mapNotNull null
 
-            // Windows/DOS FTP LIST format, e.g.:
-            // 11-17-2025 12:51PM 123456 report.ods
-            // 09-10-2026 12:12AM <DIR> 5g sim
+            // Windows/DOS FTP LIST format.
             val dos = windowsDos.matchEntire(value)
             if (dos != null) {
                 val kindOrSize = dos.groupValues[3]
@@ -608,6 +606,7 @@ class MainActivity : ComponentActivity() {
         ).orEmpty()
         serverFiles.addAll(files)
     }
+
 
 
 
