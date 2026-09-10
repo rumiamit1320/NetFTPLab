@@ -1,128 +1,30 @@
-name: Android CI
+name: Android Build
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: netftplab-main-ci
-  cancel-in-progress: false
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          fetch-depth: 0
-
-      # Push-triggered runs can be queued behind a newer main commit. Always
-      # apply the deterministic source patches to the current remote main so an
-      # older queued run cannot rebase a large generated MainActivity over a
-      # newer generated MainActivity and fail with a conflict.
-      - name: Synchronize push build with latest main
-        if: github.event_name == 'push'
-        run: |
-          git fetch origin main
-          git reset --hard origin/main
-
-      - name: Apply transfer UI fix
-        run: python3 tools/apply_transfer_ui_fix.py
-
-      - name: Apply Server UI fix
-        run: python3 tools/apply_server_ui_fix.py
-
-      - name: Apply Advanced Monitor UI fix
-        run: python3 tools/apply_advanced_monitor.py
-
-      - name: Apply device name UI fix
-        run: python3 tools/apply_device_name.py
-
-      - name: Apply multi-file transfer fix
-        run: python3 tools/apply_multi_file_transfer.py
-
-      - name: Prepare transfer reliability patch
-        run: python3 tools/prepare_transfer_reliability.py
-
-      - name: Apply transfer reliability fix
-        run: python3 tools/apply_transfer_reliability.py
-
-      - name: Clean transfer reliability source
-        run: python3 tools/cleanup_transfer_reliability.py
-
-      - name: Apply transfer operation helpers
-        run: python3 tools/apply_transfer_helpers.py
-
-      - name: Apply live telemetry fix
-        run: python3 tools/apply_live_telemetry.py
-
-      - name: Apply server and monitor visual fix
-        run: python3 tools/apply_monitor_server_visual_fix.py
-
-      - name: Apply single-item download option
-        run: python3 tools/apply_single_download_option.py
-
-      - name: Serialize FTP operations
-        run: python3 tools/apply_ftp_transfer_serialization.py
-
-      - name: Apply final monitor and transfer correction
-        run: python3 tools/apply_final_monitor_transfer_fix.py
-
-      - name: Restore working monitor and preserve transfer/device UI
-        run: python3 tools/apply_ui_preservation_fix.py
-
-      - name: Fix real-time throughput metric
-        run: python3 tools/apply_throughput_metric_fix.py
-
-      - name: Apply server storage management
-        run: python3 tools/apply_server_storage_v2.py
-
-      - name: Normalize server storage helpers
-        run: python3 tools/fix_server_storage_duplicates.py
-
-      - name: Apply robust FTP listing parser
-        run: python3 tools/apply_ftp_listing_parser_fix.py
-
-      - name: Commit patched source
-        if: github.event_name == 'push'
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/netftplab/MainActivity.kt app/src/main/java/com/netftplab/FtpClient.kt app/src/main/java/com/netftplab/AdvancedNetworkMonitor.kt app/src/main/AndroidManifest.xml app/src/main/res/xml/file_paths.xml tools/apply_advanced_monitor.py tools/apply_device_name.py tools/apply_multi_file_transfer.py tools/prepare_transfer_reliability.py tools/apply_transfer_reliability.py tools/cleanup_transfer_reliability.py tools/apply_transfer_helpers.py tools/apply_live_telemetry.py tools/apply_monitor_server_visual_fix.py tools/apply_single_download_option.py tools/apply_monitor_transfer_telemetry_fix.py tools/apply_ftp_transfer_serialization.py tools/apply_final_monitor_transfer_fix.py tools/apply_ui_preservation_fix.py tools/apply_throughput_metric_fix.py tools/apply_server_storage_management.py tools/apply_server_storage_v2.py tools/fix_server_storage_duplicates.py tools/apply_ftp_listing_parser_fix.py
-          git diff --cached --quiet || git commit -m 'Apply generated source patches'
-
-          for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            if git merge-base --is-ancestor HEAD origin/main; then
-              echo 'Remote main already contains this generated source state.'
-              exit 0
-            fi
-            if git rebase origin/main; then
-              if git push origin HEAD:main; then
-                exit 0
-              fi
-            else
-              git rebase --abort || true
-              echo 'Rebase conflict after remote main advanced; this queued run will not overwrite newer main.'
-              exit 1
-            fi
-            echo "Push race detected (attempt $attempt); retrying after fetching main..."
-            sleep 2
-          done
-          echo 'Unable to push patched source after 5 attempts.'
-          exit 1
+          fetch-depth: 1
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -133,13 +35,22 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.9'
+
+      - name: Verify project structure
+        run: |
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+          test -d app/src/main
+          echo "Project structure OK"
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: NetFTPLab-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
