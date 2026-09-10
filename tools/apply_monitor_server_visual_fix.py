@@ -122,25 +122,73 @@ def patch_server_tab() -> None:
 def patch_monitor() -> None:
     s = MON.read_text(encoding="utf-8")
 
-    # Remove the accidental repeated throughput rows introduced by the prior patch.
-    duplicate_block = '''                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")'''
-    single_row = '''                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")'''
-    s = s.replace(duplicate_block, single_row, 1)
+    # Remove duplicate App network throughput rows without assuming how many
+    # accidental copies a previous UI patch inserted. Keep the first one only.
+    lines = s.splitlines(keepends=True)
+    seen_app_rate = False
+    cleaned = []
+    for line in lines:
+        if 'Text("App network throughput: ${formatMbps(currentMbps)} Mbps")' in line:
+            if seen_app_rate:
+                continue
+            seen_app_rate = True
+        cleaned.append(line)
+    s = ''.join(cleaned)
 
-    # Prefer the transfer's measured rate while a transfer is active; otherwise use UID TrafficStats.
+    # The live rate must represent the current transfer, not a completed
+    # transfer's retained speed. After completion, fall back to the current
+    # TrafficStats delta; when idle that naturally becomes zero.
     old_measure = '''            val appBps = delta * 1000L / elapsed
-            val measured = if (appBps > 0L) appBps else transfer.speedBps
-            samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))'''
+            val transferBps = max(liveTransfer.speedBps, liveSession.throughputBps)
+            val measured = when {
+                liveTransfer.direction == "SERVER → DOWNLOADS" -> 0L
+                liveTransfer.active && transferBps > 0L -> transferBps
+                liveTransfer.message.contains("Complete", true) && transferBps > 0L -> transferBps
+                else -> appBps
+            }'''
     new_measure = '''            val appBps = delta * 1000L / elapsed
-            val measured = if (transfer.active && transfer.speedBps > 0L) transfer.speedBps else appBps
-            samples.add(LiveNetSample(now, measured, wifi.rssiDbm, wifi.snrDb, appBps))'''
+            val transferBps = max(liveTransfer.speedBps, liveSession.throughputBps)
+            val measured = when {
+                liveTransfer.direction == "SERVER → DOWNLOADS" -> 0L
+                liveTransfer.active && transferBps > 0L -> transferBps
+                else -> appBps
+            }'''
     s = s.replace(old_measure, new_measure, 1)
 
-    # Make the throughput graph autoscale to the observed data and use the actual sample count.
+    # Display zero immediately when the transfer is no longer active instead
+    # of holding the last transfer rate in the headline metric.
+    old_current = '''    val currentMbps = (samples.lastOrNull()?.throughputBps ?: transfer.speedBps) / 125_000.0
+    val peakMbps = samples.maxOfOrNull { it.throughputBps }?.div(125_000.0) ?: 0.0
+    val avgMbps = if (samples.isEmpty()) 0.0 else samples.map { it.throughputBps }.average() / 125_000.0'''
+    new_current = '''    val currentBps = if (transfer.active) {
+        max(transfer.speedBps, samples.lastOrNull()?.throughputBps ?: 0L)
+    } else {
+        samples.lastOrNull()?.appBytesBps ?: 0L
+    }
+    val currentMbps = currentBps / 125_000.0
+    val appNetworkMbps = (samples.lastOrNull()?.appBytesBps ?: 0L) / 125_000.0
+    val peakMbps = samples.maxOfOrNull { it.throughputBps }?.div(125_000.0) ?: 0.0
+    val avgMbps = if (samples.isEmpty()) 0.0 else samples.map { it.throughputBps }.average() / 125_000.0'''
+    s = s.replace(old_current, new_current, 1)
+
+    # Show the actual current transfer state in the headline instead of leaving
+    # a completed DOWNLOAD labelled as current.
+    s = s.replace(
+        'Text("Current ${transfer.direction.ifBlank { "idle" }} • ${transfer.name.ifBlank { "no active transfer" }}")',
+        'Text("Current ${if (transfer.active) transfer.direction else "IDLE"} • ${if (transfer.active) transfer.name else "no active transfer"}")',
+        1,
+    )
+
+    # The app-network value is the most recent TrafficStats delta, not the
+    # transfer headline value. This prevents the two metrics from being
+    # incorrectly identical after a transfer has completed.
+    s = s.replace(
+        'Text("App network throughput: ${formatMbps(currentMbps)} Mbps")',
+        'Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")',
+        1,
+    )
+
+    # Keep the graph historical, but use an autoscale based on observed values.
     old_throughput = '''@Composable private fun ThroughputGraph(samples: List<LiveNetSample>) {
     GraphFrame("Mbps") { val maxValue = max(1.0, samples.maxOfOrNull { it.throughputBps / 125_000.0 } ?: 1.0); drawSeries(samples.map { it.throughputBps / 125_000.0 }, maxValue) }
 }'''
@@ -154,6 +202,7 @@ def patch_monitor() -> None:
 }'''
     s = s.replace(old_throughput, new_throughput, 1)
 
+    # Use actual sample count for graph X coordinates rather than a fixed 90-sample width.
     old_series = '''private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSeries(values: List<Double>, minValue: Double = 0.0, maxValue: Double = 1.0, offset: Int = 0) {
     if (values.size < 2 || maxValue <= minValue) return
     val points = values.mapIndexed { i, value -> Offset((size.width * (i + offset) / 89f), (size.height - ((value - minValue) / (maxValue - minValue)).coerceIn(0.0, 1.0) * size.height).toFloat()) }
@@ -171,21 +220,15 @@ def patch_monitor() -> None:
 }'''
     s = s.replace(old_series, new_series, 1)
 
-    # Make the telemetry semantics explicit: these are app/protocol indicators, not RF packet captures.
-    s = s.replace('StatRow("RTT", if (session.rttMs > 0) "${session.rttMs} ms" else "Not measured")',
-                  'StatRow("RTT (discovery)", if (session.rttMs > 0) "${session.rttMs} ms" else "Not measured")', 1)
-    s = s.replace('Text("Educational model — not the Android kernel\'s actual cwnd", style = MaterialTheme.typography.bodySmall)',
-                  'Text("Educational model — not the Android kernel\'s actual cwnd", style = MaterialTheme.typography.bodySmall)', 1)
-    s = s.replace('Text("SNR/noise are estimates because standard Android Wi-Fi APIs do not expose a calibrated RF noise-floor measurement.", style = MaterialTheme.typography.bodySmall)',
-                  'Text("SNR/noise are estimates; ACK/retransmission/collision counters are application/protocol indicators, not raw Wi-Fi packet captures.", style = MaterialTheme.typography.bodySmall)', 1)
-
+    # Preserve the existing server presentation while making only the monitor
+    # metric semantics above more accurate.
     MON.write_text(s, encoding="utf-8")
 
 
 def main() -> None:
     patch_server_tab()
     patch_monitor()
-    print("Restored preferred Server tab design and corrected live monitor presentation")
+    print("Preserved Server tab and fixed live throughput metric presentation")
 
 
 if __name__ == "__main__":
