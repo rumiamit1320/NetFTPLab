@@ -11,6 +11,12 @@ def require_once(text: str, marker: str, block: str) -> str:
     return text.replace(marker, block + "\n" + marker, 1)
 
 
+def replace_once(text: str, old: str, new: str) -> str:
+    if old not in text:
+        raise SystemExit(f"replacement target not found: {old!r}")
+    return text.replace(old, new, 1)
+
+
 def main() -> None:
     s = MAIN.read_text(encoding="utf-8")
 
@@ -20,18 +26,34 @@ def main() -> None:
         '    private var showClearServerDialog by mutableStateOf(false)\n    private var showDeleteTypeDialog by mutableStateOf(false)\n    private var showServerBrowser by mutableStateOf(false)\n    private var serverBrowserPath by mutableStateOf("")'
     )
 
-    helper = '''    private fun serverStorageBytes(): Long = serverFiles.sumOf { file ->
-        if (file.isDirectory) file.walkTopDown().filter { it.isFile }.sumOf { it.length() } else file.length()
+    # Replace the old generic Android picker with an in-app browser rooted at the
+    # exact directory used by the embedded FTP server.
+    old_open = '''    private fun openServerStorage() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+            startActivity(intent)
+            log("SERVER", "Opened Android storage picker for server storage")
+        } catch (e: Exception) {
+            log("ERROR", "Could not open storage browser: ${e.message}")
+        }
     }
-
-    private fun formatStorageBytes(bytes: Long): String {
-        if (bytes < 1024L) return "$bytes B"
-        if (bytes < 1024L * 1024L) return "%.1f KB".format(Locale.US, bytes / 1024.0)
-        if (bytes < 1024L * 1024L * 1024L) return "%.1f MB".format(Locale.US, bytes / (1024.0 * 1024.0))
-        return "%.2f GB".format(Locale.US, bytes / (1024.0 * 1024.0 * 1024.0))
+'''
+    new_open = '''    private fun openServerStorage() {
+        // NetFTPShare is the embedded server's actual root. Android's generic
+        // ACTION_OPEN_DOCUMENT_TREE picker cannot reliably target this app-private
+        // directory, so show the real directory in the app's browser.
+        serverBrowserPath = ""
+        showServerBrowser = true
+        log("SERVER", "Opened actual NetFTPShare folder: ${serverRoot.absolutePath}")
     }
+'''
+    if old_open in s:
+        s = replace_once(s, old_open, new_open)
 
-    private fun serverRelativePath(file: File): String {
+    # Add only helpers that do not already exist in the original storage patch.
+    helper = '''    private fun serverRelativePath(file: File): String {
         val root = serverRoot.canonicalFile
         val target = file.canonicalFile
         if (target == root) return ""
@@ -44,15 +66,6 @@ def main() -> None:
         val current = if (relativePath.isBlank()) root else File(root, relativePath).canonicalFile
         if (current != root && !current.path.startsWith(root.path + File.separator)) throw IOException("Unsafe server path")
         return current.listFiles()?.sortedWith(compareBy<File> { !it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }).orEmpty()
-    }
-
-    private fun openServerStorage() {
-        // NetFTPShare is the embedded server's real root. Android's generic
-        // ACTION_OPEN_DOCUMENT_TREE picker cannot reliably target this app-private
-        // directory, so open the actual directory in the app's file browser.
-        serverBrowserPath = ""
-        showServerBrowser = true
-        log("SERVER", "Opened actual NetFTPShare folder: ${serverRoot.absolutePath}")
     }
 
     private fun deleteServerFilesByExtensions(extensions: Set<String>) {
@@ -88,8 +101,7 @@ def main() -> None:
 '''
     s = require_once(s, '    private fun deleteServerFile(file: File) {', helper)
 
-    # The previous patch already inserted the SERVER STORAGE card. Keep it intact,
-    # but add a dedicated Delete by Type row immediately after that card's first Row.
+    # Add a dedicated Delete by Type button below the existing Open Storage/Clear All row.
     if 'Text("Delete by Type")' not in s:
         anchor = '''                    Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
