@@ -83,7 +83,13 @@ fun AdvancedNetworkDrawer(
     val retransmissionCount = logs.count { it.layer.equals("RETX", true) || it.text.contains("retransmit", true) || it.text.contains("retransmission", true) }
     val ackCount = logs.count { it.layer.equals("ACK", true) || it.text.contains(" ACK", true) }
     val errorCount = logs.count { it.layer.equals("ERROR", true) }
-    val currentMbps = (samples.lastOrNull()?.throughputBps ?: transfer.speedBps) / 125_000.0
+    val currentBps = if (transfer.active) {
+        max(transfer.speedBps, samples.lastOrNull()?.throughputBps ?: 0L)
+    } else {
+        samples.lastOrNull()?.appBytesBps ?: 0L
+    }
+    val currentMbps = currentBps / 125_000.0
+    val appNetworkMbps = (samples.lastOrNull()?.appBytesBps ?: 0L) / 125_000.0
     val peakMbps = samples.maxOfOrNull { it.throughputBps }?.div(125_000.0) ?: 0.0
     val avgMbps = if (samples.isEmpty()) 0.0 else samples.map { it.throughputBps }.average() / 125_000.0
     val uptimeSec = max(0L, (System.currentTimeMillis() - startMs) / 1000L)
@@ -99,12 +105,10 @@ fun AdvancedNetworkDrawer(
             }
             MonitorCard("REAL-TIME THROUGHPUT") {
                 Text("${formatMbps(currentMbps)} Mbps", style = MaterialTheme.typography.headlineMedium)
-                Text("Current ${transfer.direction.ifBlank { "idle" }} • ${transfer.name.ifBlank { "no active transfer" }}")
+                Text("Current ${if (transfer.active) transfer.direction else "IDLE"} • ${if (transfer.active) transfer.name else "no active transfer"}")
                 Text("Average ${formatMbps(avgMbps)} Mbps  •  Peak ${formatMbps(peakMbps)} Mbps")
                 Text("Live app throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
-                Text("App network throughput: ${formatMbps(currentMbps)} Mbps")
+                Text("App network throughput: ${formatMbps(appNetworkMbps)} Mbps")
                 Text("Session bytes ${formatBytes(session.bytes)}")
                 Spacer(Modifier.height(8.dp)); ThroughputGraph(samples)
             }
