@@ -616,6 +616,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+
     private fun importToServer(uri: Uri) {
         val name = (queryDisplayName(uri)
             ?.replace("/", "_")
@@ -984,7 +985,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            if (clientMode) {
+            if (clientMode || remoteFiles.isNotEmpty()) {
                 item {
                     Text("REMOTE FILES", style = MaterialTheme.typography.titleMedium)
                     Text("Files and folders. Select folders to download recursively to Download/<folder>.")
