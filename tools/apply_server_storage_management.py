@@ -14,15 +14,12 @@ def require_once(text: str, marker: str, block: str) -> str:
 def main() -> None:
     s = MAIN.read_text(encoding="utf-8")
 
-    # State for the destructive confirmation dialog and the in-app server folder browser.
     s = require_once(
         s,
         '    private var showQr by mutableStateOf(false)',
-        '    private var showClearServerDialog by mutableStateOf(false)\n    private var showDeleteTypeDialog by mutableStateOf(false)\n    private var serverBrowserPath by mutableStateOf("")'
+        '    private var showClearServerDialog by mutableStateOf(false)\n    private var showDeleteTypeDialog by mutableStateOf(false)\n    private var showServerBrowser by mutableStateOf(false)\n    private var serverBrowserPath by mutableStateOf("")'
     )
 
-    # Keep all server-storage operations confined to serverRoot. Nothing outside
-    # the embedded FTP server directory can be deleted by these controls.
     helper = '''    private fun serverStorageBytes(): Long = serverFiles.sumOf { file ->
         if (file.isDirectory) file.walkTopDown().filter { it.isFile }.sumOf { it.length() } else file.length()
     }
@@ -50,11 +47,12 @@ def main() -> None:
     }
 
     private fun openServerStorage() {
-        // The FTP share lives in the app's external-files directory. ACTION_OPEN_DOCUMENT_TREE
-        // cannot reliably jump to this app-private directory, so show the actual serverRoot
-        // contents in our own browser instead of an unrelated Android folder picker.
+        // NetFTPShare is the embedded server's real root. Android's generic
+        // ACTION_OPEN_DOCUMENT_TREE picker cannot reliably target this app-private
+        // directory, so open the actual directory in the app's file browser.
         serverBrowserPath = ""
-        log("SERVER", "Opened NetFTPShare folder browser: ${serverRoot.absolutePath}")
+        showServerBrowser = true
+        log("SERVER", "Opened actual NetFTPShare folder: ${serverRoot.absolutePath}")
     }
 
     private fun deleteServerFilesByExtensions(extensions: Set<String>) {
@@ -87,107 +85,73 @@ def main() -> None:
             }
         }
     }
-
-    private fun clearServerStorage() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val root = serverRoot.canonicalFile
-                val children = root.listFiles()?.toList().orEmpty()
-                var deleted = 0
-                var failed = 0
-                for (child in children) {
-                    val target = child.canonicalFile
-                    if (!target.path.startsWith(root.path + File.separator)) {
-                        failed++
-                        continue
-                    }
-                    if (target.deleteRecursively()) deleted++ else failed++
-                }
-                withContext(Dispatchers.Main) {
-                    refreshServerFiles()
-                    serverBrowserPath = ""
-                    transfer = TransferState(message = if (failed == 0) "Server storage cleared" else "Cleared $deleted item(s); $failed could not be removed")
-                    log("SERVER", "Server storage cleared: $deleted item(s), $failed failed")
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    transfer = TransferState(message = "Clear server storage failed: ${e.message}")
-                    log("ERROR", "Clear server storage failed: ${e.message}")
-                }
-            }
-        }
-    }
 '''
     s = require_once(s, '    private fun deleteServerFile(file: File) {', helper)
 
-    # Replace the previous storage card with a card that opens the real NetFTPShare
-    # directory and exposes delete-by-extension controls.
-    start = s.find('            Card(Modifier.fillMaxWidth()) {\n                Column(Modifier.padding(14.dp)) {\n                    Text("SERVER STORAGE"')
-    if start == -1:
-        marker = '''            Spacer(Modifier.height(10.dp))
-            Text("PHONE ↔ LAPTOP", style = MaterialTheme.typography.titleMedium)'''
-        card = '''            Spacer(Modifier.height(10.dp))
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("SERVER STORAGE", style = MaterialTheme.typography.titleMedium)
-                    Text("${serverFiles.size} item(s) • ${formatStorageBytes(serverStorageBytes())} stored in NetFTPShare")
-                    Text("This browser opens the actual directory used by the embedded FTP server.")
-                    Spacer(Modifier.height(8.dp))
-                    Row(
+    # The previous patch already inserted the SERVER STORAGE card. Keep it intact,
+    # but add a dedicated Delete by Type row immediately after that card's first Row.
+    if 'Text("Delete by Type")' not in s:
+        anchor = '''                    Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Button(
+                        OutlinedButton(
                             onClick = { openServerStorage() },
                             modifier = Modifier.weight(1f)
-                        ) { Text("Open NetFTPShare") }
-                        OutlinedButton(
-                            onClick = { showDeleteTypeDialog = true },
-                            enabled = serverFiles.any { it.walkTopDown().any { child -> child.isFile && child.extension.isNotBlank() } },
+                        ) { Text("Open Storage") }
+                        Button(
+                            onClick = { showClearServerDialog = true },
+                            enabled = serverFiles.isNotEmpty(),
                             modifier = Modifier.weight(1f)
-                        ) { Text("Delete by Type") }
+                        ) { Text("Clear All") }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = { showClearServerDialog = true },
-                        enabled = serverFiles.isNotEmpty(),
+'''
+        extra = anchor + '''                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showDeleteTypeDialog = true },
+                        enabled = serverFiles.any { root -> root.walkTopDown().any { it.isFile && it.extension.isNotBlank() } },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Clear All") }
-                }
-            }
+                    ) { Text("Delete by Type") }
+'''
+        if anchor not in s:
+            raise SystemExit("SERVER STORAGE button row not found")
+        s = s.replace(anchor, extra, 1)
 
-            if (serverBrowserPath.isNotEmpty() || showDeleteTypeDialog || serverBrowserPath.isBlank()) {
-                if (serverBrowserPath.isNotBlank() || serverFiles.isNotEmpty()) {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text("NetFTPShare", style = MaterialTheme.typography.titleMedium)
-                            Text(if (serverBrowserPath.isBlank()) "/" else "/$serverBrowserPath")
-                            Spacer(Modifier.height(8.dp))
-                            val browserFiles = try { serverFilesAt(serverBrowserPath) } catch (_: Exception) { emptyList() }
+    browser = '''            if (showServerBrowser) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("NetFTPShare — Actual Server Folder", style = MaterialTheme.typography.titleMedium)
+                        Text(if (serverBrowserPath.isBlank()) "/" else "/$serverBrowserPath")
+                        Spacer(Modifier.height(8.dp))
+                        val browserFiles = try { serverFilesAt(serverBrowserPath) } catch (_: Exception) { emptyList() }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (serverBrowserPath.isNotBlank()) {
                                 OutlinedButton(onClick = {
                                     serverBrowserPath = serverBrowserPath.substringBeforeLast('/', "")
                                 }) { Text("← Parent") }
                             }
-                            if (browserFiles.isEmpty()) {
-                                Text("Empty folder")
-                            } else {
-                                browserFiles.forEach { file ->
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                    ) {
-                                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(file.name)
-                                            Text(if (file.isDirectory) "Folder" else "${formatStorageBytes(file.length())} • .${file.extension.ifBlank { "unknown" }}")
-                                        }
-                                        if (file.isDirectory) {
-                                            TextButton(onClick = { serverBrowserPath = serverRelativePath(file) }) { Text("Open") }
-                                        } else {
-                                            TextButton(onClick = { deleteServerFile(file) }) { Text("Delete") }
-                                        }
+                            OutlinedButton(onClick = { refreshServerFiles() }) { Text("Refresh") }
+                            OutlinedButton(onClick = { showServerBrowser = false }) { Text("Close") }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        if (browserFiles.isEmpty()) {
+                            Text("Folder is empty")
+                        } else {
+                            browserFiles.forEach { file ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                ) {
+                                    Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(file.name)
+                                        Text(if (file.isDirectory) "Folder" else "${formatStorageBytes(file.length())} • .${file.extension.ifBlank { "unknown" }}")
+                                    }
+                                    if (file.isDirectory) {
+                                        TextButton(onClick = { serverBrowserPath = serverRelativePath(file) }) { Text("Open") }
+                                    } else {
+                                        TextButton(onClick = { deleteServerFile(file) }) { Text("Delete") }
                                     }
                                 }
                             }
@@ -220,6 +184,7 @@ def main() -> None:
                                     Text(".$extension  ($count file${if (count == 1) "" else "s"})")
                                 }
                             }
+                            if (extensionCounts.isEmpty()) Text("No file extensions found.")
                         }
                     },
                     confirmButton = {
@@ -232,32 +197,16 @@ def main() -> None:
                 )
             }
 
-            if (showClearServerDialog) {
-                AlertDialog(
-                    onDismissRequest = { showClearServerDialog = false },
-                    title = { Text("Clear server storage?") },
-                    text = {
-                        Text("This will permanently delete ${serverFiles.size} item(s) (${formatStorageBytes(serverStorageBytes())}) stored by the phone FTP server. Original files outside NetFTPShare will not be deleted.")
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showClearServerDialog = false
-                            clearServerStorage()
-                        }) { Text("Clear") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showClearServerDialog = false }) { Text("Cancel") }
-                    }
-                )
-            }
-
 '''
+    if 'NetFTPShare — Actual Server Folder' not in s:
+        marker = '''            Spacer(Modifier.height(10.dp))
+            Text("PHONE ↔ LAPTOP", style = MaterialTheme.typography.titleMedium)'''
         if marker not in s:
             raise SystemExit("Server tab insertion marker not found")
-        s = s.replace(marker, card + marker, 1)
+        s = s.replace(marker, browser + marker, 1)
 
     MAIN.write_text(s, encoding="utf-8")
-    print("Fixed NetFTPShare browser and added delete-by-type controls")
+    print("Fixed actual NetFTPShare browser and added delete-by-file-type UI")
 
 
 if __name__ == "__main__":
